@@ -32,6 +32,22 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the template carries no secrets and is meant to be committed.
+!.env.example
+
+# Runtime data. All three live under DATA_DIR (default: the repo root).
+#
+# .cache holds *decrypted* user uploads — and the archive ciphertext too when
+# STORAGE_DRIVER=disk. .spool holds ciphertext waiting to be uploaded, which is
+# the only copy of it until the archive confirms receipt. .storage is what the
+# disk driver uses in place of archive.org. None of it belongs in git.
+/.cache/
+/.spool/
+/.storage/
+
+# Dev server log, appended to by `npm run dev`. Holds whatever the app printed,
+# which on a bad startup includes connection strings.
+dev.log
 
 # vercel
 .vercel

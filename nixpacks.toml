@@ -1,0 +1,13 @@
+# Build image, for Railway and anything else running Nixpacks.
+#
+# The only reason this file exists is ffmpeg. The upload pipeline shells out to
+# `ffmpeg` and `ffprobe` to transcode video, pull a poster frame and read
+# durations, and a Node image does not ship them — so without this, images upload
+# fine and every video or voice note fails at the door, which looks like a bug in
+# the app rather than a missing binary in the image.
+#
+# `"..."` is literal, not a placeholder: it means keep the packages Nixpacks
+# already chose (Node, npm) and add to them. Dropping it replaces the list and
+# leaves the build with no Node at all.
+[phases.setup]
+nixPkgs = ["...", "ffmpeg"]

@@ -1,26 +1,357 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------
+   Rate the Bakchod — theme.
+
+   Three standing rules:
+
+   1. NO GRADIENTS. Every fill in this file is flat.
+   2. The ground is NEUTRAL, never warm. A warm dark grey at low
+      saturation reads as dirty — brown, nicotine, unwashed. The same
+      value with the hue pulled out reads as a machined surface. This
+      is the single biggest lever in the file and the reason the
+      previous two passes failed.
+   3. The accent is WHITE. Not gold, not blue — white. Colour on a
+      dark UI is what makes it look like a consumer app; the absence
+      of it is what makes it look like an instrument. So the hierarchy
+      is carried entirely by luminance — white / ink / muted / faint
+      over a hairline border — and the one thing that gets pure white
+      is the single primary action on a surface, plus leaderboard rank
+      numbers. Everything else sits below it.
+
+   The palette below is the default (`graphite`). Three alternates
+   live at the bottom of this block and are selected by `data-palette`
+   on <html> — one constant in `app/layout.tsx`, or
+   `document.documentElement.dataset.palette = 'onyx'` in the console
+   to compare them live without a rebuild.
+   --------------------------------------------------------------- */
+
+@theme {
+  /* Near-black, a whisper cool. Not brown, not pure black. */
+  --color-bg: #08090a;
+
+  /* The row / surface tone. Opaque, so anything that must hide what is
+     behind it (a logo ring over a banner) has something solid to use. */
+  --color-panel: #0f1011;
+  --color-panel-2: #141517;
+  --color-panel-3: #1c1d20;
+
+  --color-line: #1e1f22;
+  --color-line-strong: #2e3034;
+
+  /* Off-white for body text: pure white at 15px on near-black buzzes. */
+  --color-ink: #f4f4f5;
+  --color-muted: #8f9299;
+  --color-faint: #63666e;
+
+  /* Pure white — one step above `ink`, and the only thing in the app
+     that gets it. Rank numbers and one primary action per surface. */
+  --color-accent: #ffffff;
+  --color-accent-ink: #08090a;
+
+  /* The only chroma in the theme, and it only ever appears when
+     something is wrong. */
+  --color-danger: #d6584e;
+
+  --radius-card: 16px;
+  --radius-ctl: 10px;
+  --radius-pill: 999px;
+
+  /* Restrained: a hairline of light along the top edge, a close contact
+     shadow, and one wide soft one. The inset lives in the token as well
+     as in `panel` because `shadow-card` on top of `panel` replaces the
+     box-shadow and would otherwise take the highlight with it. */
+  --shadow-card:
+    inset 0 1px 0 var(--edge), 0 1px 2px rgba(0, 0, 0, 0.45),
+    0 10px 26px -12px rgba(0, 0, 0, 0.65);
+  --shadow-pop:
+    inset 0 1px 0 var(--edge), 0 2px 6px rgba(0, 0, 0, 0.5),
+    0 22px 60px -20px rgba(0, 0, 0, 0.8);
+}
+
+/* Tokens the utilities below need that have no business becoming
+   Tailwind colour utilities. Same override story as the `--color-*`
+   names: a palette block retints these too. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+
+  /* Near-opaque over the flat background, so it reads as the row tone
+     above — but still blurs whatever scrolls under a sticky panel,
+     which is where glass actually earns itself. */
+  --glass: rgba(15, 16, 17, 0.88);
+  --glass-2: rgba(20, 21, 23, 0.72);
+  /* Bars floating over moving content: darker, so text stays legible. */
+  --glass-bar: rgba(10, 11, 12, 0.8);
+  /* The top-edge highlight. White, because the ground is neutral —
+     on a warm ground this is the thing that turned everything grey. */
+  --edge: rgba(255, 255, 255, 0.055);
+  --track: rgba(255, 255, 255, 0.1);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* --- Alternates ------------------------------------------------- */
+
+/* Onyx — true black, maximum contrast, no hue anywhere at all. Reads
+   sharpest on OLED, and hardest-edged of the four. */
+html[data-palette="onyx"] {
+  --color-bg: #000000;
+  --color-panel: #0a0a0a;
+  --color-panel-2: #101010;
+  --color-panel-3: #191919;
+  --color-line: #1f1f1f;
+  --color-line-strong: #303030;
+  --color-ink: #f5f5f5;
+  --color-muted: #909090;
+  --color-faint: #616161;
+  --color-accent: #ffffff;
+  --color-accent-ink: #000000;
+  --color-danger: #d6584e;
+  --glass: rgba(10, 10, 10, 0.9);
+  --glass-2: rgba(16, 16, 16, 0.72);
+  --glass-bar: rgba(0, 0, 0, 0.82);
+  --edge: rgba(255, 255, 255, 0.06);
+  --track: rgba(255, 255, 255, 0.1);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Slate — the same monochrome discipline over a cool blue-grey ground.
+   Softer than graphite without becoming a colour. */
+html[data-palette="slate"] {
+  --color-bg: #0a0c10;
+  --color-panel: #111419;
+  --color-panel-2: #161a20;
+  --color-panel-3: #1e232b;
+  --color-line: #1f242c;
+  --color-line-strong: #2f3641;
+  --color-ink: #eef1f5;
+  --color-muted: #8d95a3;
+  --color-faint: #626a78;
+  --color-accent: #ffffff;
+  --color-accent-ink: #0a0c10;
+  --color-danger: #dd5f52;
+  --glass: rgba(17, 20, 25, 0.88);
+  --glass-2: rgba(22, 26, 32, 0.72);
+  --glass-bar: rgba(10, 12, 16, 0.8);
+  --edge: rgba(255, 255, 255, 0.055);
+  --track: rgba(255, 255, 255, 0.1);
+}
+
+/* Plum — for when one real colour is wanted. Neutral ground, muted
+   violet accent. Violet is the one hue that stays expensive as it
+   desaturates; gold and terracotta go muddy, which is what happened. */
+html[data-palette="plum"] {
+  --color-bg: #09090b;
+  --color-panel: #101012;
+  --color-panel-2: #15151a;
+  --color-panel-3: #1d1d24;
+  --color-line: #1f1f26;
+  --color-line-strong: #2f2f3a;
+  --color-ink: #f2f1f5;
+  --color-muted: #8f8d9b;
+  --color-faint: #64626f;
+  --color-accent: #a89bd6;
+  --color-accent-ink: #09090b;
+  --color-danger: #d6584e;
+  --glass: rgba(16, 16, 18, 0.88);
+  --glass-2: rgba(21, 21, 26, 0.72);
+  --glass-bar: rgba(11, 11, 13, 0.8);
+  --edge: rgba(255, 255, 255, 0.055);
+  --track: rgba(255, 255, 255, 0.1);
+}
+
+/* --------------------------------------------------------------- */
+
+html,
+body {
+  background-color: var(--color-bg);
+  color: var(--color-ink);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Light-on-dark text optically tracks wider than dark-on-light at the
+     same value. Pulling it in is most of the difference between "a dark
+     theme" and "typeset". */
+  letter-spacing: -0.006em;
+}
+
+/* Flat scrollbars — no gradient, no chrome */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--track);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* ---------------------------------------------------------------
+   The card. Every panel in the app uses it, which is why retuning
+   this one rule moves the whole look at once.
+
+   The fill is the row tone at 88% rather than a white wash, so a
+   panel is a solid surface with a known value instead of whatever
+   happens to be behind it. The blur is only visible on the panels
+   that scroll over content (the rail, the sticky save bar) — which
+   is the only place glass ever meant anything.
+
+   No `saturate()` in the blur: there is nothing here to saturate,
+   and on a neutral palette it only pulls colour out of user photos
+   showing through.
+   --------------------------------------------------------------- */
+@utility panel {
+  background-color: var(--glass);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* A quieter pane for surfaces sitting *inside* a panel, where a second
+   full-strength layer would just look milky. */
+@utility glass-inset {
+  background-color: var(--glass-2);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-ctl);
+}
+
+/* Bars that float over scrolling content — the top bar, the mobile tab
+   bar, the feed tab strip. Darker fill and a heavier blur, because
+   legibility over moving content matters more here than translucency. */
+@utility glass-bar {
+  background-color: var(--glass-bar);
+  border: 1px solid var(--color-line);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+}
+
+/* Focus ring. `ink` rather than `accent` so it is one step below the
+   primary action it may land on, and identical in every palette. */
+@utility ring-focus {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+/* Opt out, for a field that shows focus by brightening its own border instead.
+   A text input matches `:focus-visible` even when it was clicked, so on those two
+   the rule above draws a hard white box around a control that had already said the
+   same thing more quietly — and around a small field it reads as breakage rather
+   than as focus. Unlayered and placed after, because the rule it overrides is
+   unlayered too: a Tailwind `outline-none` sits in a layer and loses to it. */
+:where(.focus-bare):focus-visible {
+  outline: none;
+}
+
+/* Range input — flat track and thumb, no gradient */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background-color: var(--track);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background-color: var(--track);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -7px;
+  height: 18px;
+  width: 18px;
+  border-radius: var(--radius-pill);
+  background-color: var(--color-ink);
+  border: 2px solid var(--color-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+input[type="range"]::-moz-range-thumb {
+  height: 18px;
+  width: 18px;
+  border: 2px solid var(--color-bg);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------------------------------------------------------
+   Story progress bars.
+
+   The bar is CSS-driven so that ticking it does not re-render the viewer sixty
+   times a second; the JS timer only fires once per story, to advance. Width
+   rather than a transform because the bar is paused mid-way when someone holds
+   the frame, and a paused `scaleX` reads as a squashed pill instead of a
+   position. Duration and play state are set inline by the viewer.
+
+   Under `prefers-reduced-motion` the rule above collapses the animation, so the
+   bar simply sits full while the timer still runs — no motion, same behaviour.
+   --------------------------------------------------------------- */
+@keyframes rtb-story-fill {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+@utility story-fill {
+  animation: rtb-story-fill linear forwards;
+}
+
+/* ---------------------------------------------------------------
+   The landing beat of the story flight.
+
+   `components/story-tray.tsx` flies the file you just posted from the composer
+   into its ring; this is the ring catching it. Kept in CSS rather than a second
+   Web Animations call because the flight is over by the time it runs and the
+   element it plays on is an ordinary rendered slot.
+
+   The reduced-motion rule near the top of this file collapses it to nothing,
+   which is the correct behaviour: the ring is already in the right place.
+   --------------------------------------------------------------- */
+@keyframes rtb-story-land {
+  0% {
+    transform: scale(0.55);
+  }
+  60% {
+    transform: scale(1.07);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@utility story-land {
+  animation: rtb-story-land 380ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }

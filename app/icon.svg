@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Rate the Bakchod">
+  <!--
+    The favicon. Same dial as components/brand-mark.tsx, redrawn at 32 with a
+    heavier stroke and its own tile, because a tab icon is 16px and has to survive
+    both a light and a dark browser chrome — a bare monochrome mark disappears into
+    one of the two. The hexes are literals: this file is served on its own and can
+    never read the app's stylesheet. They are --color-bg and --color-ink.
+  -->
+  <rect width="32" height="32" rx="7" fill="#08090a"/>
+  <g fill="none" stroke="#f4f4f5" stroke-width="2.8" stroke-linecap="round">
+    <path d="M7.4 19.6a8.6 8.6 0 0 1 17.2 0"/>
+    <path d="M16 19.6 21 13.8"/>
+  </g>
+  <circle cx="16" cy="19.6" r="2" fill="#f4f4f5"/>
+</svg>

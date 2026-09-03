@@ -1,0 +1,549 @@
+// Rate the Bakchod — data model.
+//
+// Media notes: every uploaded file is encrypted with a per-file data key (DEK)
+// before it leaves this server. The DEK itself is wrapped with MEDIA_MASTER_KEY
+// and stored here. Setting `wrappedKey` to NULL is a crypto-shred: the ciphertext
+// on Internet Archive (which cannot be deleted) becomes permanently unreadable.
+
+// Prisma 7: connection URLs live in prisma.config.ts, not here. The CLI reads
+// the direct (non-pooled) URL from there; the runtime connection string is
+// handed to the driver adapter in lib/prisma.ts.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PostKind {
+  IMAGE
+  VIDEO
+  AUDIO
+  TWEET
+}
+
+enum ArchiveState {
+  PENDING
+  UPLOADING
+  UPLOADED
+  VERIFIED
+  FAILED
+}
+
+/// How much of a profile a signed-out visitor gets to see.
+///
+/// Deliberately does NOT include a "hide me from the leaderboard" mode. Being
+/// rated in public is the whole platform; an opt-out would let the biggest
+/// bakchods duck the ranking. Privacy here covers decoration, stories, comments
+/// and secondary stats — never the score itself.
+enum ProfileVisibility {
+  PUBLIC
+  SIGNED_IN
+}
+
+enum ProfileAssetSlot {
+  BANNER
+  LOGO
+  HIGHLIGHT_COVER
+}
+
+/// Who is allowed to open a direct message thread with you.
+enum DmPolicy {
+  EVERYONE
+  FOLLOWERS
+  NOBODY
+}
+
+/// Everything the bell can announce. One enum rather than a free-text `kind`,
+/// so adding a notification type is a migration and a switch case, not a typo
+/// waiting to render blank.
+enum NotificationType {
+  FOLLOW
+  RATING
+  COMMENT
+  MENTION
+  STORY_VIEW
+  MESSAGE
+  CALL_MISSED
+  ADMIN_HIDE
+  AI_COMMENT
+}
+
+enum CallKind {
+  VOICE
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING
+  ACCEPTED
+  DECLINED
+  MISSED
+  ENDED
+  FAILED
+}
+
+model User {
+  id          String  @id @default(cuid())
+  supabaseId  String? @unique
+  handle      String  @unique
+  displayName String
+  avatarUrl   String?
+
+  /// When the handle was last changed. Backs the cooldown — a handle that keeps
+  /// moving makes every link to it a lie.
+  handleChangedAt DateTime?
+
+  // The AI bakchod has isAI = true. It is never scored and never ranked.
+  isAI    Boolean @default(false)
+  isAdmin Boolean @default(false)
+
+  // Denormalised aggregates over ratings received on this user's posts.
+  ratingsSum   Int   @default(0)
+  ratingsCount Int   @default(0)
+  bakchodScore Float @default(0)
+
+  /// Denormalised follow counters, written in the same transaction as the edge.
+  /// The profile header, every suggestion card and every conversation row would
+  /// each be a COUNT(*) otherwise.
+  followersCount Int @default(0)
+  followingCount Int @default(0)
+
+  /// Bumped by the realtime heartbeat, at most once a minute. This is the whole
+  /// presence system — no extra endpoint, no extra table.
+  lastSeenAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  posts      Post[]
+  ratings    Rating[]
+  comments   Comment[]
+  reports    Report[]
+  rateLimits RateLimit[]
+
+  /// Absent until the user customises something. No row means a stock profile,
+  /// which is what the AI account has.
+  theme         ProfileTheme?
+  profileAssets ProfileAsset[]
+  highlights    Highlight[]
+  storyViews    StoryView[]
+
+  handleHistory HandleHistory[]
+
+  following Follow[] @relation("following")
+  followers Follow[] @relation("followers")
+
+  notifications      Notification[] @relation("notificationRecipient")
+  actedNotifications Notification[] @relation("notificationActor")
+
+  conversations      ConversationMember[]
+  messages           Message[]
+  messageAttachments MessageAttachment[]
+
+  callsMade     Call[] @relation("caller")
+  callsReceived Call[] @relation("callee")
+
+  @@index([bakchodScore(sort: Desc)])
+  @@index([isAI])
+  @@index([followersCount(sort: Desc)])
+}
+
+/// Handles this user has released.
+///
+/// Two jobs, both about links that already exist in the world. `/u/<old>` keeps
+/// working by redirecting to the current handle, and nobody else may claim a
+/// freed handle for 30 days — otherwise you rename, a stranger takes your old
+/// name, and every link anyone ever shared now points at an impostor.
+model HandleHistory {
+  handle     String   @id
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  releasedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([releasedAt])
+}
+
+/// A directed follow edge. The composite primary key is the uniqueness
+/// constraint — there is no separate id, because there is nothing to point at.
+model Follow {
+  followerId String
+  follower   User   @relation("following", fields: [followerId], references: [id], onDelete: Cascade)
+  followeeId String
+  followee   User   @relation("followers", fields: [followeeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([followerId, followeeId])
+  @@index([followeeId, createdAt(sort: Desc)])
+  @@index([followerId, createdAt(sort: Desc)])
+}
+
+/// Everything a user can change about how their profile looks and who may see
+/// it. One optional row per user, so an untouched account costs nothing.
+model ProfileTheme {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tagline String? @db.VarChar(80)
+  bio     String? @db.VarChar(300)
+
+  /// Flat hex (#rrggbb), validated on write. Scoped to the profile header — it
+  /// never leaks into the rest of the app's theme, and never a gradient.
+  accent String? @db.VarChar(7)
+
+  /// Author-supplied HTML for the welcome splash. Never interpolated into the
+  /// profile page: it is served as its own sandboxed document with an opaque
+  /// origin, so a <script> here cannot reach a visitor's session.
+  welcomeHtml    String? @db.VarChar(16384)
+  welcomeEnabled Boolean @default(true)
+  /// Auto-dismiss after this many ms. 0 means wait for the visitor.
+  welcomeMs      Int     @default(4000)
+  /// Which built-in preset it started from, so the editor can show that.
+  welcomePreset  String?
+
+  bannerKey String?
+  logoKey   String?
+
+  /// [{ label, url }], max 4, http(s) only. Validated by zod on every write.
+  links Json?
+
+  pinnedPostId String? @unique
+  pinnedPost   Post?   @relation(fields: [pinnedPostId], references: [id], onDelete: SetNull)
+
+  visibility        ProfileVisibility @default(PUBLIC)
+  storiesVisibility ProfileVisibility @default(PUBLIC)
+  showRatingsGiven  Boolean           @default(true)
+  showJoinDate      Boolean           @default(true)
+  allowComments     Boolean           @default(true)
+
+  /// Who may open a DM with this user. Enforced in `openConversation`
+  /// (lib/messages.ts) — never in the UI, which a stranger could bypass.
+  dmPolicy DmPolicy @default(EVERYONE)
+
+  updatedAt DateTime @updatedAt
+}
+
+/// One direct-message thread. A two-person thread, enforced by the pairKey.
+///
+/// `pairKey` is the sorted concatenation of the two member ids, so however many
+/// times either side starts a conversation with the other, exactly one thread
+/// exists. NULL only in the brief moment of creation, which is why it is not
+/// the primary key.
+model Conversation {
+  id            String   @id @default(cuid())
+  pairKey       String?  @unique
+  lastMessageAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+
+  members       ConversationMember[]
+  messages      Message[]
+  notifications Notification[]       @relation("notificationConversation")
+  calls         Call[]
+
+  @@index([lastMessageAt(sort: Desc)])
+}
+
+model ConversationMember {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// When this member last read the thread. The other side's read tick.
+  lastReadAt DateTime?
+  joinedAt   DateTime  @default(now())
+
+  @@id([conversationId, userId])
+  @@index([userId])
+}
+
+/// A single message. Body or attachment, enforced by a CHECK constraint.
+///
+/// `deletedAt` is set rather than the row removed, so a deleted message becomes
+/// "this message was deleted" instead of a gap in a conversation someone is
+/// still looking at.
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  body          String? @db.VarChar(4000)
+  attachmentKey String? @unique
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([conversationId, createdAt(sort: Desc)])
+}
+
+/// Private image bytes for a DM.
+///
+/// Deliberately NOT the archive path. Post media goes user -> encrypt ->
+/// Internet Archive, which is permanent, public and undeletable — right for
+/// evidence, wrong for a private message. These bytes therefore follow the
+/// ProfileAsset pattern: same EXIF-stripping sharp chain, bytes in Postgres,
+/// served behind a membership check, and really deleted when the message is.
+model MessageAttachment {
+  key     String @id
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  mimeType String
+  data     Bytes
+  width    Int
+  height   Int
+  bytes    Int
+
+  createdAt DateTime @default(now())
+
+  @@index([ownerId])
+}
+
+/// A notification row. One row per unread thing; the collapse rules in
+/// lib/notifications decide when a second event updates instead of inserting.
+model Notification {
+  id      String           @id @default(cuid())
+  userId  String
+  user    User             @relation("notificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  actorId String?
+  actor   User?            @relation("notificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  type    NotificationType
+
+  postId         String?
+  commentId      String?
+  conversationId String?
+  conversation   Conversation? @relation("notificationConversation", fields: [conversationId], references: [id], onDelete: Cascade)
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, readAt])
+}
+
+/// One call attempt, stored for the thread timeline and for missed-call
+/// notifications. The SDP offers/answers and ICE candidates never land here —
+/// those are relayed in-transit by /api/calls and contain network addresses.
+model Call {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  callerId       String
+  caller         User         @relation("caller", fields: [callerId], references: [id], onDelete: Cascade)
+  calleeId       String
+  callee         User         @relation("callee", fields: [calleeId], references: [id], onDelete: Cascade)
+
+  kind      CallKind
+  status    CallStatus @default(RINGING)
+  startedAt DateTime?
+  endedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId, createdAt(sort: Desc)])
+}
+
+/// Banner / logo / highlight-cover bytes.
+///
+/// These live in Postgres rather than going through the encrypted archive path:
+/// decoration does not belong in a permanent, undeletable public library, and
+/// `enqueueArchiveUpload` is keyed to a Post. The key is random and never
+/// reused, so an asset URL is immutable and cacheable forever.
+model ProfileAsset {
+  key     String           @id
+  ownerId String
+  owner   User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  slot    ProfileAssetSlot
+
+  mimeType String
+  data     Bytes
+  width    Int
+  height   Int
+  bytes    Int
+
+  createdAt DateTime @default(now())
+
+  @@index([ownerId, slot])
+}
+
+/// A named, permanent collection of stories — the Instagram idea. Membership is
+/// what keeps a story viewable after it expires.
+model Highlight {
+  id      String @id @default(cuid())
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  title    String  @db.VarChar(40)
+  coverKey String?
+
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  posts Post[]
+
+  @@index([ownerId, sortOrder])
+}
+
+/// Who has seen a story. Drives the unseen ring on the tray, and a "seen by"
+/// list that only the story's own author is shown.
+model StoryView {
+  id       String @id @default(cuid())
+  postId   String
+  post     Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  viewerId String
+  viewer   User   @relation(fields: [viewerId], references: [id], onDelete: Cascade)
+
+  seenAt DateTime @default(now())
+
+  @@unique([postId, viewerId])
+  @@index([postId])
+}
+
+model Post {
+  id       String   @id @default(cuid())
+  authorId String
+  author   User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  kind     PostKind
+  caption  String?  @db.VarChar(500)
+
+  /// Pasted tweet text, for a TWEET post with no screenshot attached.
+  tweetText String? @db.VarChar(600)
+
+  // Storage + archive. All media fields are null for a text-only TWEET post.
+  storageKey     String?      @unique
+  archiveItem    String?
+  archiveFile    String?
+  archiveState   ArchiveState @default(PENDING)
+  archiveError   String?
+  uploadAttempts Int          @default(0)
+
+  // Envelope encryption. wrappedKey NULL => crypto-shredded, unrecoverable.
+  wrappedKey Bytes?
+  keyIv      Bytes?
+  keyTag     Bytes?
+  contentIv  Bytes?
+  contentTag Bytes?
+
+  // Media descriptors
+  sha256     String?
+  phash      String?
+  mimeType   String?
+  width      Int?
+  height     Int?
+  durationMs Int?
+  bytes      Int?
+
+  // Video poster frame. Encrypted under the same DEK as the main file (with its
+  // own IV) and stored as a sibling file in the same archive item.
+  posterKey String?
+  posterIv  Bytes?
+  posterTag Bytes?
+
+  // Rating aggregates for this post
+  ratingsSum   Int   @default(0)
+  ratingsCount Int   @default(0)
+  hotScore     Float @default(0)
+
+  isHidden  Boolean   @default(false)
+  hiddenAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  // Stories are Post rows, which is how they inherit the whole encrypted upload
+  // path for free. The cost is that every query meaning "a post on the feed"
+  // must say `isStory: false` — see FEED_SCOPE in lib/posts.ts, which is the one
+  // place that clause is written.
+  isStory        Boolean    @default(false)
+  storyExpiresAt DateTime?
+  /// Set means the story survives its expiry: highlights are permanent.
+  highlightId    String?
+  highlight      Highlight? @relation(fields: [highlightId], references: [id], onDelete: SetNull)
+
+  ratings  Rating[]
+  comments Comment[]
+  reports  Report[]
+
+  storyViews    StoryView[]
+  /// Back-relation for ProfileTheme.pinnedPost — a deleted post un-pins itself.
+  pinnedByTheme ProfileTheme?
+
+  @@index([createdAt(sort: Desc)])
+  @@index([hotScore(sort: Desc)])
+  @@index([sha256])
+  @@index([archiveState])
+  @@index([authorId])
+  @@index([isStory, storyExpiresAt])
+  @@index([authorId, isStory, storyExpiresAt])
+  @@index([highlightId])
+}
+
+model Rating {
+  id      String @id @default(cuid())
+  postId  String
+  post    Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  raterId String
+  rater   User   @relation(fields: [raterId], references: [id], onDelete: Cascade)
+
+  /// 1..10 — enforced in the API layer and by a CHECK constraint in migration SQL.
+  value Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([postId, raterId])
+  @@index([postId])
+  @@index([createdAt])
+}
+
+model Comment {
+  id       String @id @default(cuid())
+  postId   String
+  post     Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  body String  @db.VarChar(600)
+  isAI Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([postId, createdAt])
+}
+
+model Report {
+  id         String @id @default(cuid())
+  postId     String
+  post       Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reporterId String
+  reporter   User   @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  reason     String    @db.VarChar(300)
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([postId, reporterId])
+  @@index([resolvedAt])
+}
+
+/// Singleton (id = 1) holding the global rating mean used to smooth scores.
+/// AI ratings never enter these totals.
+model GlobalStats {
+  id         Int @id @default(1)
+  totalSum   Int @default(0)
+  totalCount Int @default(0)
+}
+
+model RateLimit {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bucket      String
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@unique([userId, bucket, windowStart])
+  @@index([windowStart])
+}
