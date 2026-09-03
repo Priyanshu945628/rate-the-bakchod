@@ -1,6 +1,7 @@
 import "server-only";
 
 import { cache } from "react";
+import { announceJoin } from "./notifications";
 import { prisma } from "./prisma";
 import { createClient } from "./supabase/server";
 import type { User } from "@prisma/client";
@@ -95,7 +96,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     "Anonymous Bakchod";
 
   try {
-    return await prisma.user.create({
+    const created = await prisma.user.create({
       data: {
         supabaseId,
         handle: await allocateHandle(handleSeed(claims)),
@@ -104,6 +105,11 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
       },
       include: withTheme,
     });
+    // This is the only place an account comes into existence, so it is the only
+    // honest place to announce one. Fire-and-forget: a first sign-in must not fail
+    // because a bell could not be rung.
+    void announceJoin(created);
+    return created;
   } catch {
     // Two concurrent first requests can race to create the same identity; the
     // unique index settles it and the loser just reads the winner's row.

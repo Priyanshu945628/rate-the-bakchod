@@ -185,8 +185,8 @@ export function NotificationBell({ initialUnread }: { initialUnread: number }) {
 
 /**
  * One row. A `Link` when there is somewhere to go and a plain `div` when there is
- * not — `ADMIN_HIDE` has no destination, and an anchor to nowhere is a trap for
- * anyone using a keyboard.
+ * not — the two `ADMIN_*` types have no destination, and an anchor to nowhere is a
+ * trap for anyone using a keyboard.
  */
 function Row({
   row,

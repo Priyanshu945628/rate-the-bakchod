@@ -90,6 +90,49 @@ export function sniffKind(buf: Buffer): MediaKind | null {
   return null;
 }
 
+/** ISO-BMFF major brands that mean HEVC-in-HEIF — an iPhone photo. */
+const HEIC_BRANDS = new Set([
+  "heic",
+  "heix",
+  "heim",
+  "heis",
+  "hevc",
+  "hevx",
+  "hevm",
+  "hevs",
+]);
+
+/**
+ * Whether these bytes are HEIC rather than AVIF.
+ *
+ * Both are ISO-BMFF, both are images, and `sniffKind` says IMAGE to both — but
+ * sharp's prebuilt libvips ships an AV1 decoder and no HEVC one, so an iPhone
+ * `.heic` gets all the way to the encoder before failing, with a libvips string for
+ * a message. Recognising the format up front is what turns that into a sentence
+ * somebody can act on.
+ */
+export function isHeic(buf: Buffer): boolean {
+  if (!ascii(buf, 4, "ftyp")) return false;
+
+  const brand = buf.subarray(8, 12).toString("latin1");
+  if (brand === "avif" || brand === "avis") return false;
+  if (HEIC_BRANDS.has(brand)) return true;
+
+  // `mif1`/`msf1` are the generic HEIF brands and AVIF files use them too, so the
+  // compatible-brand list decides: an AVIF names `avif` in it, an iPhone photo
+  // names `heic`. Read only as far as the `ftyp` box actually goes — past its end
+  // is other people's boxes, and a stray "avif" in there would answer this wrong.
+  if (brand === "mif1" || brand === "msf1") {
+    const declared = buf.length >= 4 ? buf.readUInt32BE(0) : 0;
+    const end = Math.min(declared > 16 ? declared : 64, buf.length, 512);
+    if (end <= 16) return true;
+    const compat = buf.subarray(16, end).toString("latin1");
+    return !compat.includes("avif") && !compat.includes("avis");
+  }
+
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // ffmpeg / ffprobe
 // ---------------------------------------------------------------------------
@@ -209,7 +252,15 @@ async function normalizeImage(input: Buffer): Promise<NormalizedMedia> {
     })
     .webp({ quality: 82 });
 
-  const { data, info } = await pipeline.toBuffer({ resolveWithObject: true });
+  const { data, info } = await pipeline
+    .toBuffer({ resolveWithObject: true })
+    .catch((err: unknown) => {
+      // Without this the raw sharp error reaches `handleRouteError`, which does not
+      // recognise it and answers 500 "Something broke on our side." A file this
+      // build cannot decode is the uploader's business, not a server fault.
+      console.error("[media] sharp could not decode an image:", err);
+      throw new MediaError("Could not read that image. Try a JPEG or PNG.");
+    });
 
   return {
     kind: "IMAGE",
@@ -342,6 +393,12 @@ export async function normalizeUpload(input: Buffer): Promise<NormalizedMedia> {
   const kind = sniffKind(input);
   if (kind === null) {
     throw new MediaError("Unsupported file type. Send an image, video, or audio clip.");
+  }
+
+  // A real image, but not one this build has a decoder for. Named here so the
+  // answer is a 415 with a sentence rather than a 500 from inside the encoder.
+  if (kind === "IMAGE" && isHeic(input)) {
+    throw new MediaError("HEIC photos are not supported — send it as JPEG or PNG.");
   }
 
   if (kind === "IMAGE") return normalizeImage(input);

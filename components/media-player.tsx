@@ -22,8 +22,12 @@ import {
  *
  *   - `feed` — the whole bar: play/pause, scrub, elapsed and total, mute, and
  *     fullscreen on video. Used in posts.
- *   - `story` — mute only, bottom-right. A story already has its segment bars for
- *     progress and taps for navigation; a second set of controls would fight them.
+ *   - `story` — play/pause and mute, floated over the corner of the picture. No
+ *     scrubber, because the segment bars above the frame are already the story's
+ *     progress and a drag would leave them reading something else; no fullscreen,
+ *     because a story advances on a timer and would drop back out of it on its own
+ *     a few seconds later. The play/pause press is handed back out through
+ *     `onPausedChange` rather than applied here — see `toggle`.
  *
  * **The scrubber is three divs and an invisible range**, not the usual
  * `linear-gradient` track fill: a track, a fill sized in percent, a thumb, and an
@@ -32,7 +36,9 @@ import {
  * the first gradient in the app's CSS, and there aren't any.
  *
  * Keys, when the frame itself has focus: Space or K to play, ← → to jump five
- * seconds, M to mute, F for fullscreen.
+ * seconds, M to mute, F for fullscreen. A story frame is deliberately not focusable
+ * — the viewer around it binds those same keys at the window, and two handlers on
+ * one press either cancel out or fire twice.
  */
 
 type Media = HTMLVideoElement | HTMLAudioElement;
@@ -47,6 +53,7 @@ export function MediaPlayer({
   startMuted = false,
   maxHeight = "70vh",
   paused,
+  onPausedChange,
   onEnded,
   className,
 }: {
@@ -65,6 +72,12 @@ export function MediaPlayer({
    * undefined and the player is the only thing that decides.
    */
   paused?: boolean;
+  /**
+   * Where the play/pause button reports to when `paused` comes from outside. Pass
+   * both or neither: without this the button would pause the element behind the
+   * back of whatever is driving it.
+   */
+  onPausedChange?: (paused: boolean) => void;
   onEnded?: () => void;
   className?: string;
 }) {
@@ -83,6 +96,11 @@ export function MediaPlayer({
   // black letterbox, so both are light regardless of palette. Only the audio card
   // in a post is on a themed surface.
   const onDark = isVideo || isStory;
+
+  // While something outside owns the play state, its flag is what the button draws.
+  // A refused play() is ordinary, and reading the element instead would leave the
+  // icon arguing with the thing that is actually in charge.
+  const showPlaying = paused !== undefined && onPausedChange ? !paused : playing;
 
   // Read once. `muted` is deliberately not a React prop below: the button writes
   // the property directly, and a controlled `muted` would put React and the button
@@ -118,6 +136,14 @@ export function MediaPlayer({
   }, []);
 
   function toggle() {
+    // A story's segment bar and its advance timer hang off the same flag the viewer
+    // pauses the element with, so the press has to go back there. Stopping the
+    // element on its own would freeze the picture and leave the bar above it filling
+    // and the story moving on over a still frame.
+    if (paused !== undefined && onPausedChange) {
+      onPausedChange(!paused);
+      return;
+    }
     const el = media.current;
     if (!el) return;
     if (el.paused) void el.play().catch(() => {});
@@ -213,9 +239,34 @@ export function MediaPlayer({
   };
 
   const controls = isStory ? (
-    // Over a video the button floats in the corner. An audio story has no picture
-    // to float over — it sits in the caption column with the text.
-    <div className={isVideo ? "absolute bottom-3 right-3 z-10" : ""}>
+    // Over a video the cluster floats in the corner. An audio story has no picture to
+    // float over — it sits in the caption column with the text, and carries a clock
+    // there because a voice note with no picture gives away nothing about its length.
+    <div
+      className={
+        isVideo
+          ? "absolute bottom-3 right-3 z-10 flex items-center gap-0.5"
+          : "flex items-center gap-1.5"
+      }
+    >
+      <IconButton
+        label={showPlaying ? "Pause" : "Play"}
+        onClick={toggle}
+        onDark
+      >
+        {showPlaying ? (
+          <PauseIcon className="h-4 w-4" />
+        ) : (
+          <PlayIcon className="h-4 w-4" />
+        )}
+      </IconButton>
+
+      {!isVideo && (
+        <span className="shrink-0 text-[11px] font-medium tabular-nums text-white/80">
+          {clock(time)} / {clock(duration)}
+        </span>
+      )}
+
       <MuteButton muted={muted} onClick={toggleMute} onDark />
     </div>
   ) : (
@@ -227,11 +278,11 @@ export function MediaPlayer({
       }`}
     >
       <IconButton
-        label={playing ? "Pause" : "Play"}
+        label={showPlaying ? "Pause" : "Play"}
         onClick={toggle}
         onDark={onDark}
       >
-        {playing ? (
+        {showPlaying ? (
           <PauseIcon className="h-4 w-4" />
         ) : (
           <PlayIcon className="h-4 w-4" />
@@ -271,7 +322,7 @@ export function MediaPlayer({
     return (
       <div
         ref={frame}
-        tabIndex={0}
+        tabIndex={isStory ? undefined : 0}
         onKeyDown={onKeyDown}
         aria-label="Audio clip"
         className={`relative ${className ?? ""}`}
@@ -285,7 +336,9 @@ export function MediaPlayer({
   return (
     <div
       ref={frame}
-      tabIndex={0}
+      // A story frame stays out of the tab order: the viewer owns the keyboard, and a
+      // focus stop here would only be somewhere for Space to mean two things at once.
+      tabIndex={isStory ? undefined : 0}
       onKeyDown={onKeyDown}
       aria-label="Video"
       style={

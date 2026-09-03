@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { ClientFollowState, ClientProfile } from "@/lib/types";
 import { Avatar } from "./avatar";
 import { FollowButton } from "./follow-button";
-import { LinkIcon, ShieldIcon, SparkIcon } from "./icons";
+import { LinkIcon, SparkIcon, VerifiedIcon } from "./icons";
 import { MessageButton } from "./message-button";
 
 /**
@@ -102,10 +102,19 @@ export function ProfileHeader({
                 AI
               </span>
             )}
+            {/* A mark on the name, not a pill beside it. A pill is another thing in
+                the row competing with the name for the eye; the badge is the same
+                grammar every platform already uses, and it reads at a glance. The
+                app's own accent, never the profile owner's — this is authority the
+                platform granted, not decoration its owner chose. */}
             {profile.isAdmin && (
-              <span className="flex items-center gap-1 rounded-pill bg-panel-3 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink">
-                <ShieldIcon className="h-3 w-3" />
-                Mod
+              <span
+                title="Moderator"
+                aria-label="Moderator"
+                role="img"
+                className="-ml-0.5 flex shrink-0 items-center text-accent"
+              >
+                <VerifiedIcon className="h-4 w-4" />
               </span>
             )}
             {/* This replaces the old "You" pill. A button that says what it does

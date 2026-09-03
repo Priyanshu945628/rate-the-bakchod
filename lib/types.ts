@@ -41,6 +41,12 @@ export interface ClientPost {
   author: ClientAuthor;
   /** What the signed-in viewer already rated this, if anything. */
   viewerRating: number | null;
+  /**
+   * A moderator deleted it. Only ever true on a post being shown to its own
+   * author — everyone else's queries exclude it — and when it is true the card
+   * is a tombstone: no media, no rating, no thread.
+   */
+  modDeleted: boolean;
 }
 
 export interface ClientComment {
@@ -247,6 +253,8 @@ export type NotificationKind =
   | "MESSAGE"
   | "CALL_MISSED"
   | "ADMIN_HIDE"
+  | "ADMIN_DELETE"
+  | "USER_JOINED"
   | "AI_COMMENT";
 
 /**
@@ -380,6 +388,17 @@ export interface ClientCallPeer {
   handle: string;
   displayName: string;
   avatarUrl: string | null;
+  /**
+   * Whether their browser was actually listening when the invitation went out.
+   *
+   * This is what separates "Calling…" from "Ringing…" on the caller's screen. It is
+   * not a guess from `lastSeenAt` — the bus knows whether a stream is open, and a
+   * ring published to nobody makes no sound at all, which the caller deserves to be
+   * told rather than left watching a timer.
+   *
+   * Absent on `signal` frames, which claim nothing about the peer beyond their id.
+   */
+  online?: boolean;
 }
 
 /**

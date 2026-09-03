@@ -6,7 +6,7 @@ import { counterpartId, mayMessage } from "./messages";
 import { notify } from "./notifications";
 import { PostServiceError, resolveAvatarUrl } from "./posts";
 import { prisma } from "./prisma";
-import { publish } from "./realtime";
+import { hasListener, publish } from "./realtime";
 import type {
   CallKindName,
   CallPhase,
@@ -299,7 +299,15 @@ export async function startCall(
 
   publish(callee.id, frame(row, "invite", toPeer(from)));
 
-  return { callId: row.id, kind, conversationId, peer: toPeer(callee) };
+  // Read after the publish, so it answers the question the caller is actually
+  // asking: did that invitation reach a browser? `hasListener` is the bus's own
+  // registry, not a timestamp — either a stream is open or the ring landed nowhere.
+  return {
+    callId: row.id,
+    kind,
+    conversationId,
+    peer: { ...toPeer(callee), online: hasListener(callee.id) },
+  };
 }
 
 // ---------------------------------------------------------------------------

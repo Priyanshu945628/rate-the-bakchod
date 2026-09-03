@@ -90,7 +90,7 @@ export function StoryTray({ trays, viewer }: StoryTrayProps) {
     <>
       <section
         aria-label="Stories"
-        className="panel flex gap-3.5 overflow-x-auto px-3.5 py-3 shadow-card"
+        className="panel no-bar flex gap-3.5 overflow-x-auto px-3.5 py-3 shadow-card"
       >
         {viewer && (
           <button

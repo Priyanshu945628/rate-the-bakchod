@@ -71,7 +71,7 @@ export function HighlightRow({
   return (
     <>
       <div className="border-t border-line px-4 py-3.5 sm:px-5">
-        <ul className="flex gap-3.5 overflow-x-auto">
+        <ul className="no-bar flex gap-3.5 overflow-x-auto">
           {live && (
             <li className="shrink-0">
               <button

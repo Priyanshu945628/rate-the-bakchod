@@ -29,6 +29,7 @@ export async function fetchOpenReports(take = 50) {
           storageKey: true,
           posterKey: true,
           isHidden: true,
+          modDeletedAt: true,
           archiveState: true,
           wrappedKey: true,
           createdAt: true,
@@ -51,6 +52,8 @@ export interface AdminReportRow {
     tweetText: string | null;
     mediaUrl: string | null;
     isHidden: boolean;
+    /** Hidden *and* marked deleted, so the author has a tombstone for it. */
+    modDeleted: boolean;
     archiveState: string;
     /** False once the wrapped key is destroyed — the bytes are unreadable. */
     hasKey: boolean;
@@ -76,6 +79,7 @@ export async function fetchReportRows(take = 50): Promise<AdminReportRow[]> {
         ? `/api/media/${r.post.storageKey}${r.post.posterKey ? "?poster=1" : ""}`
         : null,
       isHidden: r.post.isHidden,
+      modDeleted: r.post.modDeletedAt !== null,
       archiveState: r.post.archiveState,
       hasKey: r.post.wrappedKey !== null,
       authorHandle: r.post.author.handle,

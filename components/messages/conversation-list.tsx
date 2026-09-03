@@ -93,7 +93,7 @@ export function ConversationList({
 
   return (
     <aside
-      className={`panel w-full shrink-0 flex-col overflow-hidden lg:flex lg:w-[var(--split-w)] ${
+      className={`panel w-full shrink-0 flex-col overflow-hidden lg:flex lg:w-[336px] ${
         activeId ? "hidden" : "flex"
       }`}
     >

@@ -6,6 +6,10 @@ import { SparkIcon } from "./icons";
  * These are 32–40px remote OAuth images. `next/image` would route each one
  * through the optimizer for no visible gain, so they are plain `img` tags on
  * purpose — no remotePatterns config, no extra hop.
+ *
+ * The AI's spark is not a fallback. Nobody can log in as the house account, so it
+ * will never have a picture of its own, and it is drawn at full ink strength to look
+ * like the mark it is rather than an image that failed to load.
  */
 
 interface AvatarProps {
@@ -34,7 +38,7 @@ export function Avatar({ src, name, size = 40, isAI = false }: AvatarProps) {
           className="h-full w-full object-cover"
         />
       ) : isAI ? (
-        <SparkIcon className="h-1/2 w-1/2 text-muted" />
+        <SparkIcon className="h-1/2 w-1/2 text-ink" />
       ) : (
         <span className="font-semibold">{initial}</span>
       )}

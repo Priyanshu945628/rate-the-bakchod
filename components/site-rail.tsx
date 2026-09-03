@@ -123,10 +123,14 @@ export function SiteRail({
         })}
       </nav>
 
-      {/* Mobile tab bar — floating, matching the desktop column */}
+      {/* Mobile tab bar — floating, matching the desktop column.
+
+          `kb-hide` takes it off the screen while the on-screen keyboard is up. It is
+          `position: fixed`, and on iOS a fixed element does not move for the keyboard —
+          so without this it floats on top of the composer somebody is typing into. */}
       <nav
         aria-label="Main"
-        className="glass-bar fixed inset-x-3 bottom-3 z-30 flex h-16 items-stretch rounded-card lg:hidden"
+        className="glass-bar kb-hide fixed inset-x-3 bottom-3 z-30 flex h-16 items-stretch rounded-card lg:hidden"
       >
         {items.map(({ href, label, Icon, dot }) => {
           const active = isActive(href);

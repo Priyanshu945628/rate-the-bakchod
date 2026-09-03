@@ -5,10 +5,15 @@ import { useRouter } from "next/navigation";
 import type { AdminReportRow } from "@/lib/moderation";
 import { SpinnerIcon } from "./icons";
 
-type Action = "hide" | "unhide" | "shred" | "resolve" | "wipeTheme";
+type Action = "hide" | "unhide" | "modDelete" | "shred" | "resolve" | "wipeTheme";
 
 /**
  * Moderation buttons.
+ *
+ * "Hide" and "Delete" both stop a post appearing; the difference is the author's
+ * side of it. Hiding is silent — the post is simply gone. Deleting rings their bell
+ * and leaves a tombstone on their own profile, so it is something they were told
+ * about rather than something they are left to notice. "Unhide" undoes either.
  *
  * "Shred" is the destructive one and is worth understanding: the archive has no
  * delete, so it destroys the wrapped data key instead. The ciphertext stays where
@@ -27,6 +32,12 @@ export function AdminActions({ report }: { report: AdminReportRow }) {
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
 
   async function run(action: Action) {
+    if (
+      action === "modDelete" &&
+      !confirm(`Delete this post? @${report.post.authorHandle} is told it was deleted.`)
+    ) {
+      return;
+    }
     if (action === "shred" && !confirm("Destroy the key for this media? This cannot be undone.")) {
       return;
     }
@@ -79,6 +90,16 @@ export function AdminActions({ report }: { report: AdminReportRow }) {
           <SpinnerIcon className="h-4 w-4 animate-spin" />
         )}
         {report.post.isHidden ? "Unhide" : "Hide"}
+      </button>
+
+      <button
+        type="button"
+        onClick={() => run("modDelete")}
+        disabled={busy !== null || report.post.modDeleted}
+        className={`${button} text-danger hover:border-danger`}
+      >
+        {busy === "modDelete" && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+        {report.post.modDeleted ? "Deleted" : "Delete post"}
       </button>
 
       <button

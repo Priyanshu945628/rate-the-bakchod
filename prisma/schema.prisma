@@ -68,6 +68,12 @@ enum NotificationType {
   CALL_MISSED
   ADMIN_HIDE
   AI_COMMENT
+  /// A moderator removed a post. Distinct from ADMIN_HIDE because the author is
+  /// left a tombstone they can see rather than a post that quietly stopped
+  /// appearing — see `Post.modDeletedAt`.
+  ADMIN_DELETE
+  /// A new account. The only notification that fans out to everybody.
+  USER_JOINED
 }
 
 enum CallKind {
@@ -451,6 +457,16 @@ model Post {
 
   isHidden  Boolean   @default(false)
   hiddenAt  DateTime?
+
+  /// Set when a moderator deleted the post rather than merely hiding it.
+  ///
+  /// Always accompanied by `isHidden = true`, which is what keeps it out of every
+  /// feed, profile, permalink and media response — this column adds nothing to
+  /// enforcement. What it adds is the author's side of it: their own profile shows
+  /// a tombstone where the post was, so a post that vanished is a thing they were
+  /// told about rather than something they are left to notice.
+  modDeletedAt DateTime?
+
   createdAt DateTime  @default(now())
 
   // Stories are Post rows, which is how they inherit the whole encrypted upload
@@ -479,6 +495,8 @@ model Post {
   @@index([isStory, storyExpiresAt])
   @@index([authorId, isStory, storyExpiresAt])
   @@index([highlightId])
+  /// The owner's own profile asks for "my posts, plus my tombstones".
+  @@index([authorId, modDeletedAt])
 }
 
 model Rating {

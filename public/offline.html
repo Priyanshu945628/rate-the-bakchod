@@ -1,0 +1,79 @@
+<!doctype html>
+<!--
+  Served by the service worker when a navigation cannot reach the network — most
+  often the installed app being opened with no signal, where the browser's own
+  error page appears inside a chromeless window and reads as a crash.
+
+  Self-contained on purpose: styles are inline because the stylesheet is
+  content-hashed and not in the cache, and the mark is inline SVG for the same
+  reason. Colours are literals from `app/globals.css` (--color-bg, --color-ink,
+  --color-muted, --color-panel-3, --color-line).
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#08090a" />
+    <title>Offline · Rate the Bakchod</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        padding: 1.5rem;
+        background: #08090a;
+        color: #f4f4f5;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: -0.006em;
+        -webkit-font-smoothing: antialiased;
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        text-align: center;
+      }
+      p {
+        margin: 0;
+        font-size: 14px;
+        color: #8f9299;
+      }
+      button {
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: #f4f4f5;
+        padding: 0.5rem 1rem;
+        border: 1px solid #2e3034;
+        border-radius: 10px;
+        background: #1c1d20;
+        cursor: pointer;
+      }
+      button:focus-visible {
+        outline: 2px solid #f4f4f5;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <svg width="40" height="40" viewBox="0 0 32 32" role="img" aria-label="Rate the Bakchod">
+        <g fill="none" stroke="#f4f4f5" stroke-width="2.8" stroke-linecap="round">
+          <path d="M7.4 19.6a8.6 8.6 0 0 1 17.2 0" />
+          <path d="M16 19.6 21 13.8" />
+        </g>
+        <circle cx="16" cy="19.6" r="2" fill="#f4f4f5" />
+      </svg>
+      <p>No connection.</p>
+      <button type="button" onclick="location.reload()">Retry</button>
+    </main>
+  </body>
+</html>

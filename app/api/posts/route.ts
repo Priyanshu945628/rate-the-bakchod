@@ -31,6 +31,10 @@ export async function GET(request: Request) {
       cursor: url.searchParams.get("cursor"),
       authorHandle,
       viewerId: viewer?.id ?? null,
+      // Derived here, never read from the request: page two of your own profile has
+      // to carry the same tombstones page one did, and a client asking for somebody
+      // else's would be asking which of their posts a moderator took down.
+      withTombstones: Boolean(authorHandle) && viewer?.handle === authorHandle,
     });
 
     return NextResponse.json(

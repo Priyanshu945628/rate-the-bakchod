@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import type { ClientPost, ClientViewer } from "@/lib/types";
 import { Avatar } from "./avatar";
-import { ChatIcon, FlagIcon, SparkIcon } from "./icons";
+import { ChatIcon, FlagIcon, SparkIcon, SpinnerIcon, TrashIcon } from "./icons";
 import { CommentThread } from "./comment-thread";
 import { MediaView } from "./media-view";
 import { RatePanel } from "./rate-panel";
@@ -16,6 +16,10 @@ import { TimeAgo } from "./time-ago";
  * Holds its own copy of the post so a rating or a comment updates in place
  * without refetching the page around it. The feed only ever appends, so this
  * copy never goes stale underneath us.
+ *
+ * A post a moderator deleted renders as a tombstone instead — see `Tombstone`.
+ * That branch is only ever reached on the author's own profile, or in the hands of
+ * the moderator who just pressed the button; every other query drops the post.
  */
 export function PostCard({
   post: initial,
@@ -36,8 +40,9 @@ export function PostCard({
   const [reporting, setReporting] = useState(false);
   const [reportReason, setReportReason] = useState("");
   const [reportNote, setReportNote] = useState<string | null>(null);
-
-  const profileHref = `/u/${encodeURIComponent(post.author.handle)}`;
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteNote, setDeleteNote] = useState<string | null>(null);
 
   async function sendReport() {
     const reason = reportReason.trim();
@@ -55,48 +60,37 @@ export function PostCard({
     }
   }
 
+  /** Moderator delete. Collapses this card into its own tombstone on success. */
+  async function modDelete() {
+    setDeleting(true);
+    setDeleteNote(null);
+    try {
+      const res = await fetch("/api/admin", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "modDelete", postId: post.id }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        setDeleteNote(data.error ?? "Could not delete.");
+        return;
+      }
+      setConfirmDelete(false);
+      // Flipping the local copy is the confirmation: the card becomes the same
+      // tombstone the author will see, in place, with no refetch of the feed around it.
+      setPost((p) => ({ ...p, modDeleted: true }));
+    } catch {
+      setDeleteNote("Could not delete.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  if (post.modDeleted) return <Tombstone post={post} />;
+
   return (
     <article className="panel overflow-hidden shadow-card">
-      <header className="flex items-center gap-3 px-4 py-3.5">
-        <Link
-          href={profileHref}
-          aria-label={`${post.author.displayName}'s profile`}
-          className="shrink-0"
-        >
-          <Avatar
-            src={post.author.avatarUrl}
-            name={post.author.displayName}
-            isAI={post.author.isAI}
-          />
-        </Link>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href={profileHref}
-              className="truncate text-[15px] font-semibold text-ink hover:underline"
-            >
-              {post.author.displayName}
-            </Link>
-            {post.author.isAI ? (
-              <span className="flex items-center gap-1 rounded-pill border border-line-strong bg-panel-3 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink">
-                <SparkIcon className="h-3 w-3" />
-                AI
-              </span>
-            ) : post.author.bakchodScore > 0 ? (
-              <span className="rounded-pill bg-panel-3 px-2 py-0.5 text-[10px] font-semibold text-muted">
-                {post.author.bakchodScore.toFixed(1)} bakchod
-              </span>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-2 text-xs text-faint">
-            <Link href={profileHref} className="truncate transition-colors hover:text-muted">
-              @{post.author.handle}
-            </Link>
-            <span aria-hidden>·</span>
-            <TimeAgo iso={post.createdAt} />
-          </div>
-        </div>
-      </header>
+      <AuthorHeader post={post} />
 
       {post.caption && (
         <p className="px-4 pb-3 text-[15px] leading-relaxed break-words text-ink/95">
@@ -146,7 +140,47 @@ export function PostCard({
           <FlagIcon className="h-4 w-4" />
           Report
         </button>
+
+        {/* Moderators only, and enforced again in `POST /api/admin` — this button
+            being drawn is a convenience, not the permission. */}
+        {viewer?.isAdmin && (
+          <button
+            type="button"
+            onClick={() => setConfirmDelete((v) => !v)}
+            aria-expanded={confirmDelete}
+            className="flex h-9 items-center gap-2 rounded-ctl px-3 text-xs font-medium text-muted transition-colors hover:bg-panel-2 hover:text-danger"
+          >
+            <TrashIcon className="h-4 w-4" />
+            Delete
+          </button>
+        )}
       </div>
+
+      {confirmDelete && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3">
+          <span className="text-xs text-muted">Delete this post?</span>
+          <button
+            type="button"
+            onClick={modDelete}
+            disabled={deleting}
+            className="ml-auto flex h-9 items-center gap-2 rounded-ctl border border-line px-4 text-sm font-medium text-danger transition-colors hover:border-danger disabled:opacity-50"
+          >
+            {deleting && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+            Delete
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(false)}
+            className="h-9 shrink-0 rounded-ctl border border-line px-4 text-sm font-medium text-muted transition-colors hover:border-line-strong hover:text-ink"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {deleteNote && (
+        <p className="border-t border-line px-4 py-2 text-xs text-danger">{deleteNote}</p>
+      )}
 
       {reporting && (
         <div className="border-t border-line px-4 py-3">
@@ -187,6 +221,74 @@ export function PostCard({
           }
         />
       )}
+    </article>
+  );
+}
+
+/** Who posted it and when. Shared with the tombstone, which keeps this and drops the rest. */
+function AuthorHeader({ post }: { post: ClientPost }) {
+  const profileHref = `/u/${encodeURIComponent(post.author.handle)}`;
+
+  return (
+    <header className="flex items-center gap-3 px-4 py-3.5">
+      <Link
+        href={profileHref}
+        aria-label={`${post.author.displayName}'s profile`}
+        className="shrink-0"
+      >
+        <Avatar
+          src={post.author.avatarUrl}
+          name={post.author.displayName}
+          isAI={post.author.isAI}
+        />
+      </Link>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href={profileHref}
+            className="truncate text-[15px] font-semibold text-ink hover:underline"
+          >
+            {post.author.displayName}
+          </Link>
+          {post.author.isAI ? (
+            <span className="flex items-center gap-1 rounded-pill border border-line-strong bg-panel-3 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink">
+              <SparkIcon className="h-3 w-3" />
+              AI
+            </span>
+          ) : post.author.bakchodScore > 0 ? (
+            <span className="rounded-pill bg-panel-3 px-2 py-0.5 text-[10px] font-semibold text-muted">
+              {post.author.bakchodScore.toFixed(1)} bakchod
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2 text-xs text-faint">
+          <Link href={profileHref} className="truncate transition-colors hover:text-muted">
+            @{post.author.handle}
+          </Link>
+          <span aria-hidden>·</span>
+          <TimeAgo iso={post.createdAt} />
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/**
+ * What is left of a post a moderator deleted.
+ *
+ * The header stays so the author can tell which post it was; the media, the score,
+ * the thread and the report button all go, because none of them still have a
+ * subject. `toClientPost` withholds the media URLs as well, so this is not merely a
+ * component that declines to draw them.
+ */
+function Tombstone({ post }: { post: ClientPost }) {
+  return (
+    <article className="panel overflow-hidden opacity-75 shadow-card">
+      <AuthorHeader post={post} />
+      <p className="flex items-center gap-2 border-t border-line px-4 py-3 text-xs text-muted">
+        <TrashIcon className="h-4 w-4 shrink-0 text-faint" />
+        Deleted by a moderator
+      </p>
     </article>
   );
 }

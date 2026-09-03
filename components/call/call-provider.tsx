@@ -14,6 +14,7 @@ import type { CallKindName, ClientCallPeer, RealtimeEvent } from "@/lib/types";
 import { useRealtime } from "../realtime-provider";
 import { CallWindow } from "./call-window";
 import { IncomingCall } from "./incoming-call";
+import { RINGBACK, useCallTone } from "./tones";
 
 /**
  * The one call this tab can be in.
@@ -21,9 +22,9 @@ import { IncomingCall } from "./incoming-call";
  * WebRTC inside a React tree is mostly an argument about where the mutable things
  * live. The `RTCPeerConnection`, both `MediaStream`s and the queue of early ICE
  * candidates are refs; state holds only what gets drawn — who is on the other end,
- * whether it is voice or video, and which of four phases it is in. The same object is
- * mirrored into a ref so the event handlers below can read the current call without
- * every callback depending on it.
+ * whether it is voice or video, and which phase it is in. The same object is mirrored
+ * into a ref so the event handlers below can read the current call without every
+ * callback depending on it.
  *
  * Who offers is settled by the invitation rather than negotiated: the caller creates
  * the offer, and only once `accept` has come back. Neither side calls
@@ -35,7 +36,26 @@ import { IncomingCall } from "./incoming-call";
  * really do deliver an answer's candidates ahead of the answer.
  */
 
-export type CallStatus = "incoming" | "ringing" | "connecting" | "live";
+/**
+ * The phases a call is drawn in.
+ *
+ * `calling` and `ringing` are the same state of the world and two different truths
+ * about it: the invitation is out either way, but only `ringing` means a browser was
+ * there to receive it. Telling them apart is the difference between forty-five
+ * seconds of hope and knowing straight away that nobody is home.
+ *
+ * `reconnecting` exists because `RTCPeerConnection` genuinely recovers from
+ * `disconnected` — a phone changing cell, a laptop moving to another access point —
+ * and tearing the call down on the first blip would end calls that were about to
+ * carry on.
+ */
+export type CallStatus =
+  | "incoming"
+  | "calling"
+  | "ringing"
+  | "connecting"
+  | "live"
+  | "reconnecting";
 
 export interface ActiveCall {
   callId: string;
@@ -59,6 +79,13 @@ interface CallApi {
   hangUp: () => void;
   toggleMute: () => void;
   toggleCamera: () => void;
+  /**
+   * Front camera to back and back again. Only ever offered when the device
+   * actually has a second one — see `cameras`.
+   */
+  switchCamera: () => void;
+  /** Video inputs this device has. 0 until permission makes the list readable. */
+  cameras: number;
 }
 
 const CallContext = createContext<CallApi>({
@@ -70,6 +97,8 @@ const CallContext = createContext<CallApi>({
   hangUp: () => {},
   toggleMute: () => {},
   toggleCamera: () => {},
+  switchCamera: () => {},
+  cameras: 0,
 });
 
 export function useCall(): CallApi {
@@ -96,6 +125,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const [call, setCall] = useState<ActiveCall | null>(null);
   const [local, setLocal] = useState<MediaStream | null>(null);
   const [remote, setRemote] = useState<MediaStream | null>(null);
+  const [cameras, setCameras] = useState(0);
 
   const active = useRef<ActiveCall | null>(null);
   const pc = useRef<RTCPeerConnection | null>(null);
@@ -105,6 +135,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const ringTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Held between pressing call and the server answering, so a double-tap rings once. */
   const claiming = useRef(false);
+  /** Which way the camera is pointing, so switching has something to flip from. */
+  const facing = useRef<"user" | "environment">("user");
 
   /** State and its mirror move together, or a handler reads a call that has ended. */
   const apply = useCallback((next: ActiveCall | null) => {
@@ -128,6 +160,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     stream.current = null;
     early.current = [];
     claiming.current = false;
+    facing.current = "user";
     setLocal(null);
     setRemote(null);
     apply(null);
@@ -159,14 +192,28 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   /**
    * Camera and microphone. Taken before anybody's phone rings, so a browser that
    * refuses permission has not already made someone else's device buzz.
+   *
+   * The device list is counted afterwards rather than before: labels and even the
+   * number of entries are withheld until a permission has been granted, so asking
+   * first reports one camera on a phone that has three.
    */
   const getMedia = useCallback(async (kind: CallKindName): Promise<MediaStream> => {
     const media = await navigator.mediaDevices.getUserMedia({
       audio: true,
-      video: kind === "VIDEO" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+      video:
+        kind === "VIDEO"
+          ? { facingMode: facing.current, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : false,
     });
     stream.current = media;
     setLocal(media);
+
+    if (kind === "VIDEO") {
+      void navigator.mediaDevices
+        .enumerateDevices()
+        .then((devices) => setCameras(devices.filter((d) => d.kind === "videoinput").length))
+        .catch(() => {});
+    }
     return media;
   }, []);
 
@@ -190,8 +237,13 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       });
 
       conn.addEventListener("connectionstatechange", () => {
+        // `disconnected` is recoverable and routinely is — a phone stepping between
+        // cells reaches it and comes back. Only `failed` is terminal, so only
+        // `failed` ends the call.
         if (conn.connectionState === "connected") {
           patch({ status: "live" });
+        } else if (conn.connectionState === "disconnected") {
+          patch({ status: "reconnecting" });
         } else if (conn.connectionState === "failed") {
           void post({ phase: "end", callId });
           teardown();
@@ -331,7 +383,10 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           callId: data.callId,
           conversationId,
           kind,
-          status: "ringing",
+          // `online` is what the server saw when it published the invitation. False
+          // means nothing rang, and saying "Ringing…" over that would be a lie the
+          // caller only catches when the timeout expires.
+          status: data.peer.online === false ? "calling" : "ringing",
           peer: data.peer,
           outgoing: true,
           muted: false,
@@ -405,6 +460,55 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     patch({ cameraOff });
   }, [patch]);
 
+  /**
+   * Point the camera the other way.
+   *
+   * `replaceTrack` rather than a renegotiation: the sender keeps its place in the
+   * SDP, so the far end sees the picture change with no offer/answer round trip and
+   * no visible reconnect.
+   *
+   * The new track is swapped *into the existing `MediaStream`* rather than replacing
+   * the object. The local `<video>` already has that object as its `srcObject` and
+   * follows a track change live — handing it a new stream would restart playback and
+   * flash black.
+   */
+  const switchCamera = useCallback(() => {
+    const conn = pc.current;
+    const media = stream.current;
+    if (!conn || !media || active.current?.kind !== "VIDEO") return;
+    const next = facing.current === "user" ? "environment" : "user";
+
+    void (async () => {
+      let fresh: MediaStream;
+      try {
+        fresh = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: next, width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+      } catch {
+        // One camera after all, or permission withdrawn mid-call. Keep the picture
+        // that is already working.
+        return;
+      }
+
+      const track = fresh.getVideoTracks()[0];
+      if (!track) {
+        for (const t of fresh.getTracks()) t.stop();
+        return;
+      }
+
+      const sender = conn.getSenders().find((s) => s.track?.kind === "video");
+      await sender?.replaceTrack(track).catch(() => {});
+
+      for (const old of media.getVideoTracks()) {
+        media.removeTrack(old);
+        old.stop();
+      }
+      media.addTrack(track);
+      track.enabled = !active.current?.cameraOff;
+      facing.current = next;
+    })();
+  }, []);
+
   useEffect(() => {
     const bye = () => {
       const current = active.current;
@@ -427,8 +531,46 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   }, [teardown]);
 
   const api = useMemo<CallApi>(
-    () => ({ call, local, remote, start, accept, hangUp, toggleMute, toggleCamera }),
-    [call, local, remote, start, accept, hangUp, toggleMute, toggleCamera],
+    () => ({
+      call,
+      local,
+      remote,
+      start,
+      accept,
+      hangUp,
+      toggleMute,
+      toggleCamera,
+      switchCamera,
+      cameras,
+    }),
+    [
+      call,
+      local,
+      remote,
+      start,
+      accept,
+      hangUp,
+      toggleMute,
+      toggleCamera,
+      switchCamera,
+      cameras,
+    ],
+  );
+
+  /**
+   * Ringback, for the caller only.
+   *
+   * Here rather than in `CallWindow` because the sound belongs to the call and not to
+   * a panel: keyed off status, it cannot be left playing by a render that returned
+   * early. The callee's ring is the other half of this and lives in `IncomingCall`.
+   *
+   * It stops the moment `accept` arrives, because `onAccepted` moves the call to
+   * `connecting` — there is no separate stop to forget.
+   */
+  useCallTone(
+    call?.outgoing && (call.status === "calling" || call.status === "ringing")
+      ? RINGBACK
+      : null,
   );
 
   return (

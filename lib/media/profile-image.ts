@@ -13,7 +13,7 @@ import "server-only";
 
 import sharp from "sharp";
 import { limits } from "../config";
-import { MediaError, sniffKind } from "./pipeline";
+import { MediaError, isHeic, sniffKind } from "./pipeline";
 
 export interface NormalizedProfileImage {
   data: Buffer;
@@ -22,6 +22,25 @@ export interface NormalizedProfileImage {
   height: number;
   bytes: number;
 }
+
+/**
+ * The two size ceilings, so a caller that is not a banner can bring its own.
+ *
+ * DM images run the same chain under their own numbers — identical today, but
+ * `limits.dmImageMaxBytes` existing and not being the thing enforced is exactly how
+ * a limit quietly stops meaning anything.
+ */
+export interface ImageCaps {
+  /** Ceiling at the door, before any of it is handed to sharp. */
+  uploadMaxBytes: number;
+  /** Ceiling after the quality ladder has done what it can. */
+  maxBytes: number;
+}
+
+const PROFILE_CAPS: ImageCaps = {
+  uploadMaxBytes: limits.profileAssetUploadMaxBytes,
+  maxBytes: limits.profileAssetMaxBytes,
+};
 
 /**
  * Quality ladder. Most images clear the size cap on the first pass; a noisy
@@ -33,18 +52,24 @@ const QUALITY_STEPS = [82, 68, 52];
 export async function normalizeProfileImage(
   input: Buffer,
   maxEdge: number,
+  caps: ImageCaps = PROFILE_CAPS,
 ): Promise<NormalizedProfileImage> {
   if (input.byteLength === 0) throw new MediaError("That file is empty.");
-  if (input.byteLength > limits.profileAssetUploadMaxBytes) {
+  if (input.byteLength > caps.uploadMaxBytes) {
     throw new MediaError(
       `Image is ${(input.byteLength / 1048576).toFixed(1)} MB — the limit is ` +
-        `${limits.profileAssetUploadMaxBytes / 1048576} MB.`,
+        `${caps.uploadMaxBytes / 1048576} MB.`,
     );
   }
 
   // Magic bytes, never the declared Content-Type.
   if (sniffKind(input) !== "IMAGE") {
     throw new MediaError("That needs to be an image — PNG, JPEG, WebP, GIF or AVIF.");
+  }
+  // A real image that this build cannot decode. Refused here, by name, rather than
+  // left to fail inside the encoder where the only message available is libvips'.
+  if (isHeic(input)) {
+    throw new MediaError("HEIC photos are not supported — send it as JPEG or PNG.");
   }
 
   let last: { data: Buffer; width: number; height: number } | null = null;
@@ -58,21 +83,22 @@ export async function normalizeProfileImage(
       .webp({ quality })
       .toBuffer({ resolveWithObject: true })
       .catch((err: unknown) => {
-        throw new MediaError(
-          `Could not read that image: ${err instanceof Error ? err.message : "unknown error"}`,
-        );
+        // libvips messages name internal loaders and buffer offsets. They belong in
+        // the log, not in a phone-sized error under a compose box.
+        console.error("[media] sharp could not decode an image:", err);
+        throw new MediaError("Could not read that image. Try a JPEG or PNG.");
       });
 
     last = { data, width: info.width, height: info.height };
-    if (data.byteLength <= limits.profileAssetMaxBytes) break;
+    if (data.byteLength <= caps.maxBytes) break;
   }
 
   if (!last) throw new MediaError("Could not process that image.");
 
-  if (last.data.byteLength > limits.profileAssetMaxBytes) {
+  if (last.data.byteLength > caps.maxBytes) {
     throw new MediaError(
       `That image is still ${Math.round(last.data.byteLength / 1024)} KB after ` +
-        `compression — the limit is ${Math.round(limits.profileAssetMaxBytes / 1024)} KB. ` +
+        `compression — the limit is ${Math.round(caps.maxBytes / 1024)} KB. ` +
         `Try something simpler or smaller.`,
     );
   }

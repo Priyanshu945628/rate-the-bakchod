@@ -194,6 +194,159 @@ body {
   background-clip: content-box;
 }
 
+/* A strip you swipe rather than scroll. The stories tray and the highlight row
+   are both a row of round tiles that runs off the edge, and a 10px bar parked
+   underneath them reads as a slider somebody forgot to style — the tiles
+   themselves already say there is more to the right. Vertical scrollbars keep
+   theirs: those are the ones people actually use to navigate. */
+@utility no-bar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   Loading placeholders.
+
+   An opacity pulse, not a sweep. A shimmer is a gradient travelling
+   across a box, and there are no gradients in this theme; breathing
+   the fill between two flat values says "not yet" just as clearly
+   and costs one property.
+
+   `skeleton` is the block itself. `skeleton-still` marks the pieces
+   of a stack that should hold steady while its siblings pulse —
+   without it a page of twenty placeholders strobes.
+   --------------------------------------------------------------- */
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@utility skeleton {
+  background-color: var(--color-panel-3);
+  border-radius: var(--radius-ctl);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+@utility skeleton-still {
+  background-color: var(--color-panel-3);
+  border-radius: var(--radius-ctl);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   The on-screen keyboard.
+
+   `--kb` is how much of the layout viewport something is covering
+   that CSS cannot see — almost always a phone keyboard. It is
+   written by `KeyboardInset` from the VisualViewport API and is
+   `0px` on every desktop and whenever nothing is focused, so any
+   `calc()` that subtracts it is a no-op the rest of the time.
+
+   This exists because `dvh` is not enough. Android shrinks the
+   layout viewport when the keyboard opens, so `dvh` tracks it; iOS
+   does not — it shrinks only the *visual* viewport and scrolls the
+   layout under it. A chat sized in `dvh` therefore keeps its full
+   height on iOS, and the composer you are typing into ends up
+   behind the keyboard.
+
+   `data-keyboard="open"` on <html> is the same fact as a selector.
+   Anything pinned to the bottom of the screen has to get out of the
+   way while the keyboard is up: on iOS a `position: fixed` bar does
+   not move with it, so the tab bar would otherwise float on top of
+   the very field that summoned it.
+   --------------------------------------------------------------- */
+:root {
+  --kb: 0px;
+}
+
+html[data-keyboard="open"] .kb-hide {
+  display: none;
+}
+
+/* ---------------------------------------------------------------
+   The chat surface's height.
+
+   Plain CSS rather than an arbitrary Tailwind value because there
+   are three cases and each needs a sentence.
+
+   A thread scrolls internally and is anchored to its bottom, so it
+   has to be exactly as tall as the space it is given — a thread that
+   grew the document instead would fight the page scroll every time a
+   message arrived.
+
+   The subtrahend is the chrome around the main column: the top bar
+   and the page's own padding, plus — below `lg` — the floating tab
+   bar and the 7rem `<main>` reserves for it.
+   --------------------------------------------------------------- */
+.chat-surface {
+  height: calc(100dvh - 8.5rem - var(--kb));
+}
+
+@media (min-width: 64rem) {
+  .chat-surface {
+    /* No tab bar on a wide screen; the rail is beside the column, not under it. */
+    height: calc(100dvh - 6rem - var(--kb));
+  }
+}
+
+html[data-keyboard="open"] .chat-surface {
+  /* The tab bar is hidden and `<main>`'s reservation for it has collapsed, so
+     that 7rem goes back to the thread rather than staying as a gap under the
+     keyboard. */
+  height: calc(100dvh - 1.5rem - var(--kb));
+}
+
+html[data-keyboard="open"] .kb-flush {
+  padding-bottom: 0.75rem;
+}
+
+/* ---------------------------------------------------------------
+   Typing dots.
+
+   Three dots that fade in turn — the second way the app says someone
+   is typing, sitting where their next message will appear. The
+   header says it in words at the same time; this one says it in the
+   place you are already looking.
+
+   Opacity only, so it obeys the no-gradient rule and costs nothing
+   to composite. The stagger is a negative delay rather than three
+   keyframe sets, which is what keeps the three dots on one cycle.
+   --------------------------------------------------------------- */
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+@utility typing-dot {
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-dot {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 /* ---------------------------------------------------------------
    The card. Every panel in the app uses it, which is why retuning
    this one rule moves the whole look at once.

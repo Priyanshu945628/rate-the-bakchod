@@ -28,6 +28,8 @@ const NOTIFICATION_TYPES = [
   "MESSAGE",
   "CALL_MISSED",
   "ADMIN_HIDE",
+  "ADMIN_DELETE",
+  "USER_JOINED",
   "AI_COMMENT",
 ] as const;
 
@@ -81,6 +83,21 @@ describe("describeNotification", () => {
     const out = describeNotification(row({ type: "ADMIN_HIDE" }), "me");
     expect(out.text).not.toContain("Priya");
     expect(out.href).toBeNull();
+  });
+
+  it("names no moderator on a deleted post, and links nowhere", () => {
+    // The post is gone from every page including its own permalink; the only place
+    // it still exists is the tombstone on the author's profile, which is not a
+    // `/p/<id>`. A link here would 404.
+    const out = describeNotification(row({ type: "ADMIN_DELETE" }), "me");
+    expect(out.text).not.toContain("Priya");
+    expect(out.href).toBeNull();
+  });
+
+  it("sends a join announcement to the person who joined", () => {
+    const out = describeNotification(row({ type: "USER_JOINED" }), "me");
+    expect(out.text).toBe("Priya joined Rate the Bakchod");
+    expect(out.href).toBe("/u/priya");
   });
 
   it("points a follow at the follower and a message at the thread", () => {

@@ -462,3 +462,67 @@ export function MicOffIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+/**
+ * Front camera to back. A lens ringed by two arrows that turn the same way.
+ *
+ * Not the plain camera with a slash — that reads as "camera off", which is the
+ * button sitting immediately next to this one.
+ */
+export function FlipCameraIcon({ className }: IconProps) {
+  return (
+    <svg {...stroke} className={className}>
+      <circle cx="12" cy="12" r="3.1" />
+      <path d="M6.6 7.4A7.2 7.2 0 0 1 19.2 10" />
+      <path d="M19.2 6.2V10h-3.8" />
+      <path d="M17.4 16.6A7.2 7.2 0 0 1 4.8 14" />
+      <path d="M4.8 17.8V14h3.8" />
+    </svg>
+  );
+}
+
+/**
+ * Install. An arrow coming down into a tray.
+ *
+ * The tray is a three-sided path rather than a rectangle with the top removed,
+ * so the two upper ends stay square to the arrow instead of drifting apart at
+ * 16px — rule 2 of the header, applied to an open shape.
+ */
+export function InstallIcon({ className }: IconProps) {
+  return (
+    <svg {...stroke} className={className}>
+      <path d="M12 4.4v9.4" />
+      <path d="m8.2 10.4 3.8 3.8 3.8-3.8" />
+      <path d="M4.8 16.2v1.9a1.5 1.5 0 0 0 1.5 1.5h11.4a1.5 1.5 0 0 0 1.5-1.5v-1.9" />
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Standing
+// ---------------------------------------------------------------------------
+
+/**
+ * The moderator badge: a tick inside a scalloped disc.
+ *
+ * Filled rather than stroked, and the only filled glyph in the set. That is
+ * deliberate — a badge has to read as a *mark on* the name rather than another
+ * control beside it, and at 14px a stroked scallop turns to mush. The tick is
+ * punched out of the fill with the panel colour supplied by the caller, so the
+ * badge takes the accent of whatever it is sitting on.
+ */
+export function VerifiedIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden className={className}>
+      <path d="M12 2.6l2.06 1.55 2.55-.36 1.03 2.37 2.37 1.03-.36 2.55L21.2 12l-1.55 2.06.36 2.55-2.37 1.03-1.03 2.37-2.55-.36L12 21.2l-2.06-1.55-2.55.36-1.03-2.37-2.37-1.03.36-2.55L2.8 12l1.55-2.06-.36-2.55 2.37-1.03L7.39 3.99l2.55.36L12 2.6Z" />
+      <path
+        d="m8.4 12.2 2.5 2.5 4.7-5.4"
+        fill="none"
+        stroke="var(--badge-ink, #0f1011)"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}

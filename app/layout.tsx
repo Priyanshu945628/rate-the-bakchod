@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { getCurrentUser } from "@/lib/auth";
@@ -24,6 +24,42 @@ export const metadata: Metadata = {
   title: "Rate the Bakchod",
   description:
     "Post the evidence, let the internet score the bakchodi. Leaderboard included.",
+  // `app/manifest.ts`. Without this link the browser never looks for it, and
+  // nothing is installable.
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    // iOS has no manifest: this is what makes a home-screen launch open without
+    // Safari's chrome, and it is the only way to say so on that platform.
+    capable: true,
+    title: "Bakchod",
+    // `black`, not `black-translucent`. Translucent lets the page run under the
+    // status bar, and the top bar is 12px from the top of the viewport — it would
+    // be sitting under the clock.
+    statusBarStyle: "black",
+  },
+};
+
+/**
+ * `themeColor` paints the browser's own chrome — the Android address bar, the
+ * desktop title bar of an installed window — the same near-black as the ground, so
+ * the app does not sit in a light frame. One value, not a light/dark pair: this UI
+ * has no light mode.
+ *
+ * `interactiveWidget: "resizes-content"` asks the browser to shrink the layout
+ * viewport when the on-screen keyboard opens. Android honours it, which is what
+ * makes `dvh` track the keyboard there. iOS ignores it — that is what
+ * `components/keyboard-inset.tsx` and `--kb` are for — but asking costs nothing and
+ * removes the Android half of the problem before any JavaScript runs.
+ *
+ * `maximumScale` and `userScalable` are deliberately left alone: locking zoom is
+ * the standard way an app becomes unusable for anybody who needs to enlarge it.
+ */
+export const viewport: Viewport = {
+  themeColor: "#08090a",
+  colorScheme: "dark",
+  width: "device-width",
+  initialScale: 1,
+  interactiveWidget: "resizes-content",
 };
 
 /**
@@ -77,7 +113,11 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
               />
               <div className="min-w-0 flex-1">
                 <TopBar viewer={viewer} unread={unread} />
-                <main className="pb-28 pt-3 lg:pb-3">{children}</main>
+                {/* `pb-28` reserves the floating tab bar's height on phones.
+                    `kb-flush` gives it back while the keyboard is up, because the
+                    tab bar has hidden itself by then and the space would otherwise
+                    be a gap under the composer. */}
+                <main className="kb-flush pb-28 pt-3 lg:pb-3">{children}</main>
               </div>
             </div>
           </CallProvider>

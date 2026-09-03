@@ -137,6 +137,16 @@ export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId:
     bottom.current?.scrollIntoView({ block: "end" });
   }, [lastId]);
 
+  // The typing bubble gets the same treatment, but only from near the bottom. It
+  // comes and goes on a 4s timer, and yanking somebody out of the history they were
+  // reading every four seconds is worse than not seeing the dots.
+  useEffect(() => {
+    if (!typing) return;
+    const box = scroller.current;
+    if (!box || box.scrollHeight - box.scrollTop - box.clientHeight > 120) return;
+    bottom.current?.scrollIntoView({ block: "end" });
+  }, [typing]);
+
   useEffect(() => () => {
     if (typingTimer.current) clearTimeout(typingTimer.current);
   }, []);
@@ -200,7 +210,11 @@ export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId:
         onError={setError}
       />
 
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      {/* `overflow-x-hidden` as well as the fixes on the bubbles themselves: a
+          scroll container cannot have `overflow-y: auto` and `overflow-x: visible`,
+          so anything wide in here would otherwise put a horizontal scrollbar across
+          the whole thread. Nothing in a bubble is meant to be scrolled sideways. */}
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
         {cursor ? (
           <button
             type="button"
@@ -227,6 +241,10 @@ export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId:
               <CallRow key={entry.id} entry={entry} />
             ),
           )}
+          {/* The second half of "typing" — the header says it in words, this says it
+              where their message is about to appear. Inside the list so it takes the
+              same gap as a bubble and pushes the anchor below it. */}
+          {typing ? <TypingBubble /> : null}
         </ul>
         <div ref={bottom} />
       </div>
@@ -428,6 +446,38 @@ function duration(ms: number): string {
 }
 
 /**
+ * Three dots where their next message will be.
+ *
+ * Sized and coloured as one of their bubbles rather than as a badge, so the thread
+ * does not reflow when the dots are replaced by the sentence they were standing in
+ * for. `role="status"` because the header's "Typing…" is not a live region and one
+ * of the two ways of saying this has to reach a screen reader.
+ *
+ * The stagger is negative delays on one shared keyframe — `-1.2s` is a whole cycle
+ * and so is the same as none, which is what lets the three read as a wave without
+ * any of them starting out flat.
+ */
+function TypingBubble() {
+  return (
+    <li className="flex justify-start">
+      <span
+        role="status"
+        aria-label="Typing"
+        className="flex items-center gap-1 rounded-card border border-line bg-panel-2 px-3 py-2.5"
+      >
+        {[-1.2, -1, -0.8].map((delay) => (
+          <span
+            key={delay}
+            className="typing-dot h-1.5 w-1.5 rounded-pill bg-muted"
+            style={{ animationDelay: `${delay}s` }}
+          />
+        ))}
+      </span>
+    </li>
+  );
+}
+
+/**
  * One message.
  *
  * Delete is offered on your own bubbles only, and it clears the content on both sides —
@@ -497,11 +547,14 @@ function Bubble({
           ) : (
             <>
               {message.imageUrl ? (
+                // `max-w-full` is not decoration: without it a landscape photo takes
+                // whatever width 320px of height implies, which is wider than the 80%
+                // bubble and pushes a scrollbar across the whole thread.
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={message.imageUrl}
                   alt=""
-                  className="mb-1 max-h-[320px] w-auto rounded-ctl border border-line"
+                  className="mb-1 max-h-[320px] w-auto max-w-full rounded-ctl border border-line"
                 />
               ) : null}
               {message.body ? (
@@ -644,12 +697,12 @@ function Composer({
       ) : null}
 
       {attachment ? (
-        <div className="relative mb-1.5 inline-block">
+        <div className="relative mb-1.5 inline-block max-w-full">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={attachment.url}
             alt=""
-            className="max-h-[120px] w-auto rounded-ctl border border-line"
+            className="max-h-[120px] w-auto max-w-full rounded-ctl border border-line"
           />
           <button
             type="button"
@@ -710,7 +763,11 @@ function Composer({
           }}
           placeholder="Message"
           aria-label="Message"
-          className="focus-bare max-h-[120px] min-h-[36px] w-full resize-none rounded-ctl border border-line bg-panel-2 px-2.5 py-2 text-[13.5px] leading-snug text-ink outline-none placeholder:text-faint focus:border-line-strong"
+          // `min-w-0 flex-1`, never `w-full`: this is a flex child sharing the row
+          // with two 36px buttons, and `width: 100%` plus those buttons plus the gaps
+          // is wider than the row — which is the horizontal scrollbar that showed up
+          // across the whole thread on a phone.
+          className="focus-bare max-h-[120px] min-h-[36px] min-w-0 flex-1 resize-none rounded-ctl border border-line bg-panel-2 px-2.5 py-2 text-[13.5px] leading-snug text-ink outline-none placeholder:text-faint focus:border-line-strong"
         />
 
         <button

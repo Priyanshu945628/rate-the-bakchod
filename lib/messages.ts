@@ -789,16 +789,20 @@ export interface StoredMessageImage {
  * and a failed upload costs nothing — the row sits there owned by the uploader
  * until a `sendMessage` claims it.
  *
- * The pipeline is `normalizeProfileImage`, unchanged: same sharp chain, same
- * `.rotate()` before resize, same EXIF strip, same quality ladder down to the 400 KB
- * cap. The DM limits in `lib/config.ts` are numerically identical to the profile
- * ones, so this is genuine reuse rather than a coincidence worth a second function.
+ * The pipeline is `normalizeProfileImage`: same sharp chain, same `.rotate()` before
+ * resize, same EXIF strip, same quality ladder. The caps come from the DM half of
+ * `lib/config.ts` rather than the profile half — numerically identical today, but a
+ * limit that is defined and never enforced stops meaning anything the moment one of
+ * the two numbers moves.
  */
 export async function putMessageImage(
   user: User,
   file: Buffer,
 ): Promise<StoredMessageImage> {
-  const image = await normalizeProfileImage(file, limits.dmImageMaxEdge);
+  const image = await normalizeProfileImage(file, limits.dmImageMaxEdge, {
+    uploadMaxBytes: limits.dmImageUploadMaxBytes,
+    maxBytes: limits.dmImageMaxBytes,
+  });
   const key = newStorageKey();
 
   await prisma.messageAttachment.create({

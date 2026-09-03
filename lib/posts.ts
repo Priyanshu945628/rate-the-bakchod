@@ -409,6 +409,9 @@ const feedSelect = {
   ratingsSum: true,
   ratingsCount: true,
   createdAt: true,
+  // Carried so a tombstone can render as one. Every query except the author's own
+  // profile excludes these rows anyway, so on the feed this is always null.
+  modDeletedAt: true,
   author: {
     select: {
       id: true,
@@ -440,8 +443,18 @@ export async function fetchFeed(options: {
   viewerId?: string | null;
   /** Restrict to one person's posts — this is what a profile page renders. */
   authorHandle?: string | null;
+  /**
+   * Also return this author's mod-deleted posts, as tombstones.
+   *
+   * Only ever set when the viewer *is* the author — both call sites derive it from
+   * that, never from anything a client sends. `authorHandle` is required with it:
+   * "my deleted posts" is a profile question, and mixing tombstones into a public
+   * feed would show everyone what a moderator took down.
+   */
+  withTombstones?: boolean;
 }): Promise<FeedPage> {
   const { tab, cursor, viewerId, authorHandle } = options;
+  const withTombstones = options.withTombstones === true && Boolean(authorHandle);
 
   // For You is a blend of three queries rather than one ordering, so it has its
   // own path. It needs a viewer to have a graph at all, and it is meaningless
@@ -462,7 +475,17 @@ export async function fetchFeed(options: {
 
   const rows = await prisma.post.findMany({
     where: {
-      ...FEED_SCOPE,
+      // A tombstone is `isHidden`, so it has to be let back in explicitly rather
+      // than by relaxing the scope: `isHidden: false` OR mod-deleted keeps a post
+      // hidden by ADMIN_HIDE invisible even to its author, which is what that
+      // action means. Only a deletion leaves a marker. `isStory` still comes from
+      // FEED_SCOPE — a deleted story is not a feed row either way.
+      ...(withTombstones
+        ? {
+            isStory: FEED_SCOPE.isStory,
+            OR: [{ isHidden: false }, { modDeletedAt: { not: null } }],
+          }
+        : FEED_SCOPE),
       // Filtering by handle rather than id keeps the caller from having to
       // resolve one first; handle is unique, so this is an index lookup.
       ...(authorHandle ? { author: { handle: authorHandle } } : {}),
@@ -865,14 +888,18 @@ export type { AvatarSource } from "./avatar";
  * byte-identical and hydration stays quiet.
  */
 export function toClientPost(post: FeedPost): ClientPost {
+  const modDeleted = post.modDeletedAt !== null;
   return {
     id: post.id,
     kind: post.kind,
     caption: post.caption,
     tweetText: post.tweetText,
-    mediaUrl: post.storageKey ? `/api/media/${post.storageKey}` : null,
+    // A tombstone hands out no media URL. `/api/media` would refuse it anyway —
+    // it checks `isHidden` — but a dead <img> in a card is a broken icon, and the
+    // point of the tombstone is that the post is gone, not that it failed to load.
+    mediaUrl: post.storageKey && !modDeleted ? `/api/media/${post.storageKey}` : null,
     posterUrl:
-      post.storageKey && post.posterKey
+      post.storageKey && post.posterKey && !modDeleted
         ? `/api/media/${post.storageKey}?poster=1`
         : null,
     mimeType: post.mimeType,
@@ -894,6 +921,7 @@ export function toClientPost(post: FeedPost): ClientPost {
       bakchodScore: post.author.bakchodScore,
     },
     viewerRating: post.viewerRating,
+    modDeleted,
   };
 }
 

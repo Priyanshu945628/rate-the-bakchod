@@ -19,11 +19,24 @@ import "server-only";
 import type { NotificationType, Prisma } from "@prisma/client";
 import { resolveAvatarUrl } from "./avatar";
 import { prisma } from "./prisma";
-import { publish } from "./realtime";
+import { hasListener, publish } from "./realtime";
 import type { ClientNotification, ClientNotificationPage } from "./types";
 
 /** How many rows the bell asks for at a time. */
 const PAGE_SIZE = 20;
+
+/**
+ * How many people one new account may be announced to.
+ *
+ * "Everyone gets told" is the product rule, and at this size everyone is everyone.
+ * The cap is here so it stays a bounded write if the platform ever gets big: past
+ * it, the announcement goes to the most recently active accounts, because a bell
+ * nobody opens is not worth an unbounded INSERT.
+ */
+const JOIN_FANOUT_LIMIT = 5000;
+
+/** Rows per INSERT in the fan-out. Postgres has a parameter ceiling per statement. */
+const JOIN_FANOUT_CHUNK = 500;
 
 /**
  * How long a repeat event folds into the row already sitting unread.
@@ -128,10 +141,16 @@ export function describeNotification(
       return { text: `${who} sent you a message`, href: dmHref };
     case "CALL_MISSED":
       return { text: `Missed call from ${who}`, href: dmHref };
+    case "USER_JOINED":
+      return { text: `${who} joined Rate the Bakchod`, href: actorHref };
     case "ADMIN_HIDE":
       // No actor: which moderator acted is not the reader's business, and naming
       // one turns a moderation decision into a personal one.
       return { text: "A moderator hid one of your posts", href: null };
+    case "ADMIN_DELETE":
+      // No link either. The post is gone everywhere except the author's own
+      // profile, where the tombstone is — a `/p/<id>` here would 404.
+      return { text: "A moderator deleted one of your posts", href: null };
   }
 }
 
@@ -161,7 +180,7 @@ function toClient(row: NotificationRow, selfHandle: string): ClientNotification 
 export interface NotifyInput {
   /** Who is being told. */
   userId: string;
-  /** Who caused it. Null for system events — only `ADMIN_HIDE` so far. */
+  /** Who caused it. Null for system events — the two `ADMIN_*` types. */
   actorId?: string | null;
   type: NotificationType;
   postId?: string | null;
@@ -291,9 +310,65 @@ export async function notifyPostAuthor(
 }
 
 // ---------------------------------------------------------------------------
-// Mentions
+// The one broadcast
 // ---------------------------------------------------------------------------
 
+/**
+ * Tell everybody that somebody joined.
+ *
+ * The only notification in the app that is not addressed to one person about one
+ * thing they did, which is why it does not go through `notify`: that inserts a row,
+ * counts unread, and publishes, per recipient. Doing that N times for one sign-up
+ * would be 3N queries for an event nobody is waiting on.
+ *
+ * So the recipients are split. Anyone with an open stream goes through `notify`,
+ * because they get the row *and* the live line in the bell and both have to agree.
+ * Everyone else is one bulk INSERT per chunk — their bell is correct the next time
+ * they load a page, which is the only time they will look at it.
+ *
+ * The AI is excluded. It has no bell and reads the feed on its own schedule.
+ *
+ * Called from `getCurrentUser` at the moment the row is created, and fire-and-forget
+ * like every other notification: a failure here must never turn a first sign-in into
+ * an error page.
+ */
+export async function announceJoin(joiner: { id: string }): Promise<void> {
+  try {
+    const recipients = await prisma.user.findMany({
+      where: { id: { not: joiner.id }, isAI: false },
+      // Most recently seen first, so if the cap ever bites it keeps the people who
+      // are actually here. Nulls (never opened a page) sort last.
+      orderBy: [{ lastSeenAt: { sort: "desc", nulls: "last" } }, { id: "asc" }],
+      take: JOIN_FANOUT_LIMIT,
+      select: { id: true },
+    });
+    if (recipients.length === 0) return;
+
+    const live: string[] = [];
+    const quiet: string[] = [];
+    for (const { id } of recipients) (hasListener(id) ? live : quiet).push(id);
+
+    for (let i = 0; i < quiet.length; i += JOIN_FANOUT_CHUNK) {
+      await prisma.notification.createMany({
+        data: quiet.slice(i, i + JOIN_FANOUT_CHUNK).map((userId) => ({
+          userId,
+          actorId: joiner.id,
+          type: "USER_JOINED" as const,
+        })),
+      });
+    }
+
+    await Promise.all(
+      live.map((userId) => notify({ userId, actorId: joiner.id, type: "USER_JOINED" })),
+    );
+  } catch (err) {
+    console.error("[notifications] failed to announce a join:", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mentions
+// ---------------------------------------------------------------------------
 /**
  * `@handle` in a caption or a comment.
  *

@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ClientViewer } from "@/lib/types";
 import { AuthButton } from "./auth-button";
 import { BrandMark } from "./brand-mark";
+import { InstallApp } from "./install-app";
 import { NotificationBell } from "./notification-bell";
 
 /**
@@ -33,6 +34,10 @@ export function TopBar({
         </Link>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
+        {/* Registers the service worker for everyone, and shows a button only if
+            the browser offers to install. Signed out included: installing is not
+            an account feature. */}
+        <InstallApp />
         {/* Only for signed-in visitors: there is nothing to notify a stranger about,
             and the stream it listens on requires a session. */}
         {viewer && <NotificationBell initialUnread={unread} />}

@@ -141,6 +141,10 @@ export function StoryViewer({
         event.preventDefault();
         rewind();
       } else if (event.key === " ") {
+        // Only from the shell itself, which is what holds focus on open. Once focus is
+        // on a control, Space is that control's click — the player's own play button
+        // flips this same flag, and handling the key here as well would cancel it out.
+        if (event.target !== shellRef.current) return;
         event.preventDefault();
         setPaused((p) => !p);
       } else if (event.key === "Tab") {
@@ -289,7 +293,12 @@ export function StoryViewer({
         </header>
 
         <div className="relative flex-1 overflow-hidden rounded-card bg-black">
-          <StoryFrame story={story} paused={paused} onEnded={advance} />
+          <StoryFrame
+            story={story}
+            paused={paused}
+            onPausedChange={setPaused}
+            onEnded={advance}
+          />
 
           {/* Tap zones. Buttons rather than divs so the whole thing works from a
               keyboard as well, and labelled because they are otherwise invisible. */}
@@ -340,10 +349,16 @@ export function StoryViewer({
 function StoryFrame({
   story,
   paused,
+  onPausedChange,
   onEnded,
 }: {
   story: ClientStory;
   paused: boolean;
+  /**
+   * A clip's own play button reports here rather than pausing itself, so one press
+   * stops the picture, the segment bar and the advance timer together.
+   */
+  onPausedChange: (paused: boolean) => void;
   onEnded: () => void;
 }) {
   if (!story.mediaUrl) {
@@ -367,6 +382,7 @@ function StoryFrame({
         // hates. The speaker button in the corner gives the volume back.
         startMuted
         paused={paused}
+        onPausedChange={onPausedChange}
         onEnded={onEnded}
         className="h-full w-full"
       />
@@ -388,6 +404,7 @@ function StoryFrame({
           src={story.mediaUrl}
           autoPlay
           paused={paused}
+          onPausedChange={onPausedChange}
           onEnded={onEnded}
         />
       </div>

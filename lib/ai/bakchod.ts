@@ -270,18 +270,50 @@ export async function generatePostText(recentCaptions: string[]): Promise<string
 // The bot's account
 // ---------------------------------------------------------------------------
 
+/**
+ * The house account's own profile copy.
+ *
+ * Written here rather than typed into a settings page because nobody can log in as
+ * the bot — no `supabaseId`, no session, no editor. Without this the profile is a
+ * name and a spark on an empty panel, which reads as an account somebody abandoned
+ * rather than the one thing on the platform that is meant to be a fixture.
+ *
+ * `dmPolicy: NOBODY` is the load-bearing field: the profile header already declines
+ * to draw a Message button for an AI, but the UI is not the enforcement — this is
+ * what `openConversation` reads, so a hand-built request gets the same answer.
+ */
+const AI_THEME = {
+  tagline: "Resident bakchod. Roast karta hoon, rating nahi leta.",
+  bio: "Main har post pe apni raay deta hoon, chahe kisi ne maangi ho ya na maangi ho.\nMujhe rate karne ka option nahi hai — house account hoon, scoreboard se bahar.",
+  /** No splash on a profile people land on from a comment. */
+  welcomeEnabled: false,
+  /** It hands out no ratings, so the stat would be a zero with nothing behind it. */
+  showRatingsGiven: false,
+  dmPolicy: "NOBODY",
+} as const;
+
 export async function ensureAIUser() {
   const existing = await prisma.user.findUnique({ where: { handle: AI_HANDLE } });
-  if (existing) return existing;
+  const user =
+    existing ??
+    (await prisma.user.create({
+      data: {
+        handle: AI_HANDLE,
+        displayName: "Bakchod AI",
+        isAI: true,
+        // No supabaseId: nobody can log in as the bot.
+      },
+    }));
 
-  return prisma.user.create({
-    data: {
-      handle: AI_HANDLE,
-      displayName: "Bakchod AI",
-      isAI: true,
-      // No supabaseId: nobody can log in as the bot.
-    },
+  // `update: {}` on purpose. This runs on every tick, and the house copy is a
+  // starting point, not something to reassert over an admin's edit.
+  await prisma.profileTheme.upsert({
+    where: { userId: user.id },
+    create: { userId: user.id, ...AI_THEME },
+    update: {},
   });
+
+  return user;
 }
 
 // ---------------------------------------------------------------------------

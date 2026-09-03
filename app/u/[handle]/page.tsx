@@ -83,7 +83,15 @@ export default async function ProfilePage(props: PageProps<"/u/[handle]">) {
   }
 
   const [page, highlights, live, pinned, follow] = await Promise.all([
-    fetchFeed({ tab: "fresh", authorHandle: profile.handle, viewerId: user?.id ?? null }),
+    fetchFeed({
+      tab: "fresh",
+      authorHandle: profile.handle,
+      viewerId: user?.id ?? null,
+      // Your own profile is the one place a post a moderator deleted still shows —
+      // as a tombstone, so it is something you were told about rather than
+      // something you are left to notice was missing.
+      withTombstones: isSelf,
+    }),
     fetchHighlights(profile.id),
     fetchAuthorStories(profile.handle, user?.id ?? null),
     row.theme?.pinnedPostId
@@ -141,8 +149,13 @@ export default async function ProfilePage(props: PageProps<"/u/[handle]">) {
               hint={profile.average !== null ? `avg ${profile.average.toFixed(1)}` : undefined}
             />
           )}
-          <Stat label="Posts" value={String(profile.postsCount)} />
-          <Stat label="Comments" value={String(profile.commentsCount)} />
+          <Stat label="Posts" value={String(profile.postsCount)} lead={profile.isAI} />
+          <Stat
+            // The house account's comments *are* its roasts, and calling them that is
+            // the difference between a stat and a label that happens to be a number.
+            label={profile.isAI ? "Roasts" : "Comments"}
+            value={String(profile.commentsCount)}
+          />
           {/* Null means the owner switched this stat off, so the number never left
               the server. Absent, not blanked. */}
           {!profile.isAI && profile.ratingsGiven !== null && (
