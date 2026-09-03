@@ -65,7 +65,7 @@ Useful offline and for tests.
 |---|---|
 | `npm run check-env` | Preflight on `.env.local` / `.env`. Prints no values. |
 | `npm run dev` | Dev server. Also starts an in-process tick that drives the AI bakchod every few minutes so you can watch it work. |
-| `npm run build` / `npm start` | Production build and serve. |
+| `npm run build` / `npm start` | Production build and serve. `build` generates the Prisma client first. |
 | `npm test` | Vitest: crypto round-trips and shredding, the weighted score, rate-limit windows. |
 | `npm run lint` | ESLint, including the React Compiler rules Next 16 ships. |
 
@@ -84,6 +84,13 @@ npm run build
 npm start
 ```
 
+`build` runs `prisma generate` before `next build`. The generated client lives in
+`node_modules`, which is not committed, and `@prisma/client` v7 no longer generates
+it from an install hook — so on a fresh checkout a bare `next build` fails on a
+client that was never generated. It sits in the build script rather than in
+`postinstall` because some builders copy only `package.json` into the install
+layer, where `prisma/schema.prisma` does not exist yet.
+
 **`ffmpeg` and `ffprobe` must be in the image.** The upload pipeline shells out to
 them for transcoding, poster frames and duration probing. Without them, video and
 audio uploads fail at the door while images keep working — a confusing way to find
@@ -96,9 +103,13 @@ nixPkgs = ["...", "ffmpeg"]
 ```
 
 `"..."` is literal there, not a placeholder: it means *keep the packages Nixpacks
-already picked*. On a builder that resolves package sets differently — Docker,
-Heroku buildpacks — install the two binaries however that image does it; nothing in
-the app cares where they came from, only that they answer on `PATH`.
+already picked*. That file is only read when the builder actually is Nixpacks —
+Railway chooses one per service under **Settings → Build** and the default moves
+over time, so if a video upload fails in production, run `ffmpeg -version` in a
+deploy shell before suspecting the pipeline. On a builder that resolves package
+sets differently — Docker, Heroku buildpacks — install the two binaries however
+that image does it; nothing in the app cares where they came from, only that they
+answer on `PATH`.
 
 **Mount a volume and point `DATA_DIR` at it.** Three directories are written at
 runtime: `.cache/media` (plaintext derivatives), `.spool` (ciphertext waiting for
@@ -108,7 +119,11 @@ spool is the only copy of ciphertext the archive has not accepted yet, and the
 cache is the only servable copy of media until it has. Deploy without a volume and
 a post made shortly before it goes `FAILED` with *"Spooled ciphertext is missing"*
 while its media 404s. One variable rather than three because a host gives you one
-volume per service.
+volume per service. Mount it outside the app directory — `/data` is the
+conventional choice, and `/app` would shadow the code — then set `DATA_DIR` to that
+path. Keep the service at a single replica for as long as the cache and spool are
+local disk: a second replica gets its own empty volume and serves 404s for media
+the first one is holding.
 
 **Environment.** Everything in `.env.example`, set as service variables rather than
 an uploaded file:
@@ -146,6 +161,12 @@ is not a scheduler. In production point a cron at `POST /api/cron/bakchod` every
 few minutes with `Authorization: Bearer $CRON_SECRET`. That route also recovers
 stuck uploads, drains the archive queue and prunes expired rate-limit rows, so it
 earns its schedule even with no Anthropic key at all.
+
+Any scheduler that can set a header works — a Railway cron service in the same
+project whose start command curls the URL, or something external. Missing a tick is
+not data loss: a new upload kicks the archive drain in-process. What the schedule
+buys is the bot posting on its own, and a retry for an upload that failed while the
+process was down.
 
 ## How it fits together
 
