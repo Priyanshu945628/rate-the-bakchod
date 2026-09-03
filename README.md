@@ -133,7 +133,7 @@ an uploaded file:
 | `DATABASE_URL` | Transaction pooler, 6543, with `?pgbouncer=true&connection_limit=1`. |
 | `DIRECT_URL` | Session pooler, 5432. Migrations only. |
 | `NEXT_PUBLIC_SUPABASE_URL` · `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The publishable key. The service-role key is never needed and must never be set. |
-| `NEXT_PUBLIC_SITE_URL` | The deployed origin, exactly. |
+| `NEXT_PUBLIC_SITE_URL` | The deployed origin. Read in exactly one place — the welcome splash's CSP — so a wrong value blocks that iframe; it has no effect on sign-in. |
 | `MEDIA_MASTER_KEY` | The **same** 32 bytes as before. A fresh one leaves every existing file unreadable. |
 | `CRON_SECRET` | Authenticates the tick route below. |
 | `STORAGE_DRIVER` · `IA_ACCESS_KEY` · `IA_SECRET_KEY` · `IA_ITEM_PREFIX` | Archive credentials. |
@@ -146,10 +146,14 @@ they must be present for the build and a change to one needs a redeploy, not a
 restart. `npm run check-env` works the same way on the server as it does locally
 and still prints no values.
 
-**Auth.** Supabase → Authentication needs the deployed origin as its Site URL and
-`<origin>/auth/callback` in the redirect allow-list, matching
-`NEXT_PUBLIC_SITE_URL`. Google refuses a redirect it was not told about, and the
-failure surfaces as a sign-in button that goes nowhere.
+**Auth.** Supabase → Authentication → URL Configuration wants the deployed origin as
+its Site URL, and `<origin>/auth/callback` in the redirect allow-list. That list is
+the part sign-in actually depends on: `startGoogleSignIn` builds the redirect from
+`window.location.origin`, so an origin the list has not been told about comes back
+as a sign-in button that goes nowhere. Keep the `http://localhost:3000/auth/callback`
+entry alongside it, or dev sign-in stops working. Nothing changes in the Google
+console — Supabase is the broker there, and Google only ever sees
+`…supabase.co/auth/v1/callback`.
 
 **Schema.** Once per database: `npx prisma migrate deploy` against `DIRECT_URL`, or
 paste `prisma/migrations/*/migration.sql` into the Supabase SQL editor — the same
