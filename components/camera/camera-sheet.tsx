@@ -118,7 +118,17 @@ export function CameraSheet({
   const [mode, setMode] = useState<Mode>("photo");
   const [facing, setFacing] = useState<"user" | "environment">("environment");
   const [mirrored, setMirrored] = useState(false);
-  const [cameras, setCameras] = useState(1);
+  /**
+   * Whether to offer the flip button.
+   *
+   * A phone always gets it. Every one of them has a camera on each face, and
+   * `enumerateDevices` is not reliable enough to prove it — an in-app browser or a
+   * locked-down webview can report a single unlabelled entry while a second camera
+   * sits there waiting to be asked for by `facingMode`. A desktop is the opposite
+   * case: most really do have one webcam, and a button that switches to nothing is
+   * worse than no button, so there the count decides.
+   */
+  const [canFlip, setCanFlip] = useState(false);
   const [lens, setLens] = useState(ORIGINAL);
   const [ready, setReady] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -193,10 +203,11 @@ export function CameraSheet({
         // way every self-view has always behaved.
         const settings = media.getVideoTracks()[0]?.getSettings();
         setMirrored(settings?.facingMode !== "environment");
-        // Only worth a flip button if there is somewhere to flip to, and only countable
-        // after permission: before it, browsers report one unlabelled entry.
+        // Countable only after permission: before it, browsers report one unlabelled
+        // entry. On a phone the count is not what decides — see `canFlip`.
         const list = await devices.enumerateDevices().catch(() => []);
-        if (!cancelled) setCameras(list.filter((device) => device.kind === "videoinput").length);
+        const inputs = list.filter((device) => device.kind === "videoinput").length;
+        if (!cancelled) setCanFlip(inputs > 1 || handheld());
       } catch (cause) {
         if (!cancelled) setError(reason(cause));
       }
@@ -665,27 +676,28 @@ export function CameraSheet({
 
         {/* Over the picture, not above it. Both are their own translucent disc rather than
             sitting on a scrim, which is what keeps a white shirt behind them readable
-            without dimming the frame somebody is trying to aim. */}
+            without dimming the frame somebody is trying to aim. 40px discs because a thumb
+            reaches for them on a phone, and there is no crowding to answer to out here. */}
         <div className="absolute inset-x-0 top-0 flex items-center px-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
           <button
             type="button"
             onClick={onClose}
             disabled={busy !== null}
             aria-label="Close camera"
-            className="flex h-9 w-9 items-center justify-center rounded-pill bg-black/45 text-ink transition-colors hover:bg-black/60 disabled:opacity-40"
+            className="flex h-10 w-10 items-center justify-center rounded-pill bg-black/45 text-ink transition-colors hover:bg-black/60 disabled:opacity-40"
           >
-            <XIcon className="h-4 w-4" />
+            <XIcon className="h-5 w-5" />
           </button>
 
-          {!shot && cameras > 1 ? (
+          {!shot && canFlip ? (
             <button
               type="button"
               onClick={flip}
               disabled={recording}
               aria-label="Switch camera"
-              className="ml-auto flex h-9 w-9 items-center justify-center rounded-pill bg-black/45 text-ink transition-colors hover:bg-black/60 disabled:opacity-40"
+              className="ml-auto flex h-10 w-10 items-center justify-center rounded-pill bg-black/45 text-ink transition-colors hover:bg-black/60 disabled:opacity-40"
             >
-              <FlipCameraIcon className="h-4 w-4" />
+              <FlipCameraIcon className="h-5 w-5" />
             </button>
           ) : null}
         </div>
@@ -853,14 +865,25 @@ function coverCrop(video: HTMLVideoElement): {
  * still here is kept at what the server keeps.
  */
 function videoConstraints(facingMode: "user" | "environment"): MediaTrackConstraints {
-  const portrait =
-    window.matchMedia("(orientation: portrait)").matches &&
-    window.matchMedia("(pointer: coarse)").matches;
+  const portrait = handheld() && window.matchMedia("(orientation: portrait)").matches;
   return {
     facingMode,
     width: { ideal: portrait ? CAPTURE_SHORT : CAPTURE_LONG },
     height: { ideal: portrait ? CAPTURE_LONG : CAPTURE_SHORT },
   };
+}
+
+/**
+ * Whether this is a device someone is holding rather than sitting at.
+ *
+ * A coarse pointer is the honest test — it asks about the input the visitor actually
+ * has instead of reading a user-agent string, and a touchscreen laptop answering yes
+ * costs nothing here: both places this decides something are asking "is there a camera
+ * on the back of this thing", and both degrade to a portrait request and a flip button
+ * that does nothing surprising.
+ */
+function handheld(): boolean {
+  return window.matchMedia("(pointer: coarse)").matches;
 }
 
 /** Elapsed take, as a clock. */
