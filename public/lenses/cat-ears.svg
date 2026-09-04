@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 180" width="300" height="180">
+  <!-- Two upright ears. Centred on the brow. -->
+  <defs>
+    <linearGradient id="catfur" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a4b52"/>
+      <stop offset="1" stop-color="#26272c"/>
+    </linearGradient>
+  </defs>
+  <path d="M46,160 C42,102 56,46 80,20 C106,52 128,110 136,160 Z" fill="url(#catfur)"/>
+  <path d="M254,160 C258,102 244,46 220,20 C194,52 172,110 164,160 Z" fill="url(#catfur)"/>
+  <path d="M66,152 C62,110 72,68 86,48 C102,74 114,116 120,152 Z" fill="#dd8fa0"
+        opacity="0.85"/>
+  <path d="M234,152 C238,110 228,68 214,48 C198,74 186,116 180,152 Z" fill="#dd8fa0"
+        opacity="0.85"/>
+</svg>

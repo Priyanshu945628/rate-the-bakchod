@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 340" width="240" height="340">
+  <!-- Front-facing horse head. The eyes sit on the vertical centre of the viewBox so
+       that centring this on a face's eye line drops the muzzle over nose and mouth. -->
+  <defs>
+    <linearGradient id="coat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a86f45"/>
+      <stop offset="1" stop-color="#7d4c2c"/>
+    </linearGradient>
+    <radialGradient id="muzzle" cx="0.5" cy="0.45" r="0.62">
+      <stop offset="0" stop-color="#d3a781"/>
+      <stop offset="1" stop-color="#b07f5c"/>
+    </radialGradient>
+  </defs>
+
+  <!-- ears -->
+  <path d="M78,134 C62,98 56,52 66,24 C80,44 98,86 101,128 Z" fill="#7d4c2c"/>
+  <path d="M162,134 C178,98 184,52 174,24 C160,44 142,86 139,128 Z" fill="#7d4c2c"/>
+  <path d="M80,126 C70,100 66,66 71,44 C80,60 92,90 95,122 Z" fill="#c1877a"/>
+  <path d="M160,126 C170,100 174,66 169,44 C160,60 148,90 145,122 Z" fill="#c1877a"/>
+
+  <!-- head -->
+  <path d="M120,108 C60,108 34,150 34,196 C34,240 44,262 56,282 C68,306 88,328 120,328
+           C152,328 172,306 184,282 C196,262 206,240 206,196 C206,150 180,108 120,108 Z"
+        fill="url(#coat)"/>
+  <ellipse cx="120" cy="282" rx="60" ry="50" fill="url(#muzzle)"/>
+
+  <!-- mane -->
+  <path d="M120,100 C98,100 84,118 82,148 C95,132 107,124 120,124 C133,124 145,132 158,148
+           C156,118 142,100 120,100 Z" fill="#3b2718"/>
+  <path d="M104,104 C96,120 94,138 97,152 C90,138 90,116 98,102 Z" fill="#2b1c11"/>
+  <path d="M136,104 C144,120 146,138 143,152 C150,138 150,116 142,102 Z" fill="#2b1c11"/>
+
+  <!-- eyes -->
+  <ellipse cx="66" cy="176" rx="15" ry="18" fill="#1a1210"/>
+  <ellipse cx="174" cy="176" rx="15" ry="18" fill="#1a1210"/>
+  <circle cx="61" cy="170" r="4.5" fill="#ffffff" opacity="0.85"/>
+  <circle cx="169" cy="170" r="4.5" fill="#ffffff" opacity="0.85"/>
+
+  <!-- nostrils and mouth -->
+  <ellipse cx="98" cy="276" rx="11" ry="14" fill="#4a2c1c" transform="rotate(-16 98 276)"/>
+  <ellipse cx="142" cy="276" rx="11" ry="14" fill="#4a2c1c" transform="rotate(16 142 276)"/>
+  <path d="M100,306 C110,314 130,314 140,306" stroke="#6b4429" stroke-width="5"
+        fill="none" stroke-linecap="round"/>
+</svg>

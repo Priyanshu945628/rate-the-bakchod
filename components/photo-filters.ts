@@ -9,47 +9,31 @@
  * has to agree about what "Noir" means, and a client that has never heard of a filter
  * cannot render it as no filter at all.
  *
+ * The list itself lives in `lib/lenses/catalog.ts` now, beside the face lenses the
+ * camera also offers; this file keeps the drawing. The two are worth separating because
+ * only one of them is shared with the server: the catalog says what a lens *is*, and the
+ * server reads it too, while everything below here needs a canvas and a browser.
+ *
  * Three surfaces share the list: a photo on its way into a DM, and the camera's still
  * and its clip. One list is the point — Retro has to be the same Retro wherever it is
  * offered, and a look somebody found in a chat has to be there when they open the
  * camera.
  */
 
-export interface PhotoFilter {
-  id: string;
-  label: string;
-  /** Empty means untouched — the picture exactly as it was taken or picked. */
-  css: string;
-}
+import { COLOUR_LENSES, ORIGINAL, filterCss } from "@/lib/lenses/catalog";
+import type { Lens } from "@/lib/lenses/catalog";
 
-/** The one every picture starts on. */
-export const ORIGINAL = "original";
+export type PhotoFilter = Lens;
 
 /**
- * Eight, in the order they are shown.
+ * The eight colour presets, original first.
  *
- * Enough to change the mood of a photo, few enough that the strip fits under the
- * preview on a phone without becoming a thing to be browsed.
+ * Deliberately not the whole dial: these are the ones a browser can apply on its own, so
+ * this is what the DM composer — which has no camera and no server round trip — offers.
  */
-export const PHOTO_FILTERS: PhotoFilter[] = [
-  { id: ORIGINAL, label: "Original", css: "" },
-  { id: "mono", label: "Mono", css: "grayscale(1) contrast(1.12)" },
-  { id: "noir", label: "Noir", css: "grayscale(1) contrast(1.5) brightness(0.88)" },
-  { id: "warm", label: "Warm", css: "sepia(0.3) saturate(1.4) contrast(1.05)" },
-  {
-    id: "cool",
-    label: "Cool",
-    css: "hue-rotate(-12deg) saturate(1.15) brightness(1.05) contrast(1.05)",
-  },
-  { id: "vivid", label: "Vivid", css: "saturate(1.65) contrast(1.18)" },
-  { id: "fade", label: "Fade", css: "saturate(0.7) brightness(1.12) contrast(0.86)" },
-  { id: "retro", label: "Retro", css: "sepia(0.45) saturate(1.55) hue-rotate(-18deg) contrast(1.12)" },
-];
+export const PHOTO_FILTERS: PhotoFilter[] = COLOUR_LENSES;
 
-/** Look one up by id, falling back to leaving the picture alone. */
-export function filterCss(id: string): string {
-  return PHOTO_FILTERS.find((preset) => preset.id === id)?.css ?? "";
-}
+export { ORIGINAL, filterCss };
 
 /**
  * Whether this browser can draw a filter into a canvas.

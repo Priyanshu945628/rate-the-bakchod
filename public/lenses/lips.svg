@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 86" width="220" height="86">
+  <!-- A tint rather than paint: soft-light keeps the lip texture underneath. Kept wide and
+       shallow, close to a real mouth's ratio, so it does not spread onto the chin. -->
+  <defs>
+    <linearGradient id="lip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d8465f" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#b02a44" stop-opacity="0.58"/>
+    </linearGradient>
+  </defs>
+  <path d="M24,40 C50,20 78,18 110,32 C142,18 170,20 196,40 C168,46 140,45 110,43
+           C80,45 52,46 24,40 Z" fill="url(#lip)"/>
+  <path d="M24,42 C48,68 80,78 110,78 C140,78 172,68 196,42 C160,54 130,57 110,57
+           C90,57 60,54 24,42 Z" fill="url(#lip)"/>
+  <path d="M78,64 C92,70 128,70 142,64" stroke="#ffffff" stroke-width="5" fill="none"
+        stroke-linecap="round" opacity="0.2"/>
+</svg>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 80" width="280" height="80">
+  <!-- Eye-anchored: lash lines centred on 25% and 75% of the width, and the line itself on
+       the vertical centre so the art lands on the lid rather than on the eyebrow. Shallow
+       on purpose — hairs any longer than this read as a second pair of brows. -->
+  <g stroke="#171314" fill="none" stroke-linecap="round" opacity="0.8">
+    <path d="M40,50 C50,38 62,33 78,33 C92,33 102,38 108,45" stroke-width="5"/>
+    <path d="M240,50 C230,38 218,33 202,33 C188,33 178,38 172,45" stroke-width="5"/>
+    <g stroke-width="3.2">
+      <path d="M42,47 C38,42 35,38 33,34"/>
+      <path d="M53,39 C50,34 49,30 48,26"/>
+      <path d="M66,34 C65,29 65,26 65,23"/>
+      <path d="M79,33 C79,28 80,25 81,22"/>
+      <path d="M238,47 C242,42 245,38 247,34"/>
+      <path d="M227,39 C230,34 231,30 232,26"/>
+      <path d="M214,34 C215,29 215,26 215,23"/>
+      <path d="M201,33 C201,28 200,25 199,22"/>
+    </g>
+  </g>
+</svg>

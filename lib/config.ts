@@ -208,6 +208,13 @@ export const rateLimits = {
    * nothing, while a thread that is nothing but links still unfurls.
    */
   linkPreview: { max: 120, windowSec: 3600 },
+  /**
+   * Drawing a face lens. Its own bucket, and a wide one: a lens is *tried*, not sent, so
+   * one photo that ends in a single post can easily be six renders while somebody picks.
+   * Metered all the same — each one spawns a detector and composites at full size, which
+   * is the most CPU any request here asks for.
+   */
+  lens: { max: 120, windowSec: 3600 },
 } as const;
 
 export type RateLimitBucket = keyof typeof rateLimits;

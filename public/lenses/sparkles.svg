@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 640" width="400" height="640">
+  <!-- Frame-wide sparkle scatter, meant for a screen blend. -->
+  <defs>
+    <radialGradient id="spark" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ffe9a8" stop-opacity="0"/>
+    </radialGradient>
+    <g id="star">
+      <path d="M0,-22 C3,-7 7,-3 22,0 C7,3 3,7 0,22 C-3,7 -7,3 -22,0 C-7,-3 -3,-7 0,-22 Z"
+            fill="#fff6dc"/>
+      <circle cx="0" cy="0" r="20" fill="url(#spark)"/>
+    </g>
+  </defs>
+  <g opacity="0.95">
+    <use href="#star" transform="translate(58,96) scale(1.15)"/>
+    <use href="#star" transform="translate(332,64) scale(0.8)"/>
+    <use href="#star" transform="translate(366,214) scale(1.05)"/>
+    <use href="#star" transform="translate(40,286) scale(0.7)"/>
+    <use href="#star" transform="translate(300,420) scale(0.95)"/>
+    <use href="#star" transform="translate(84,478) scale(1.2)"/>
+    <use href="#star" transform="translate(210,560) scale(0.75)"/>
+    <use href="#star" transform="translate(352,586) scale(0.9)"/>
+    <use href="#star" transform="translate(150,40) scale(0.6)"/>
+    <use href="#star" transform="translate(26,600) scale(0.65)"/>
+  </g>
+  <g fill="#fff3cf" opacity="0.6">
+    <circle cx="120" cy="180" r="3.5"/><circle cx="268" cy="150" r="3"/>
+    <circle cx="196" cy="300" r="3.5"/><circle cx="72" cy="392" r="3"/>
+    <circle cx="322" cy="332" r="3.5"/><circle cx="248" cy="486" r="3"/>
+    <circle cx="136" cy="612" r="3.5"/><circle cx="380" cy="452" r="3"/>
+  </g>
+</svg>

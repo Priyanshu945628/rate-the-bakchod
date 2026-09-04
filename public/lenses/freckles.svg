@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 130" width="260" height="130">
+  <!-- Across the nose bridge and out onto both cheeks. Multiply blend, low alpha.
+       Density carries this, not size: dots any larger than these read as moles. -->
+  <g fill="#a06f4e">
+    <g opacity="0.55">
+      <circle cx="118" cy="52" r="2"/><circle cx="134" cy="45" r="1.6"/>
+      <circle cx="128" cy="65" r="1.8"/><circle cx="143" cy="59" r="1.5"/>
+      <circle cx="113" cy="69" r="1.5"/><circle cx="125" cy="38" r="1.4"/>
+      <circle cx="138" cy="72" r="1.4"/><circle cx="108" cy="58" r="1.5"/>
+    </g>
+    <g opacity="0.46">
+      <circle cx="76" cy="52" r="2.1"/><circle cx="58" cy="61" r="1.8"/>
+      <circle cx="88" cy="67" r="1.9"/><circle cx="66" cy="76" r="1.7"/>
+      <circle cx="48" cy="51" r="1.5"/><circle cx="82" cy="42" r="1.6"/>
+      <circle cx="46" cy="70" r="1.8"/><circle cx="96" cy="56" r="1.5"/>
+      <circle cx="56" cy="88" r="1.6"/><circle cx="78" cy="84" r="1.4"/>
+      <circle cx="68" cy="46" r="1.4"/><circle cx="92" cy="77" r="1.5"/>
+      <circle cx="38" cy="60" r="1.4"/><circle cx="70" cy="66" r="1.6"/>
+      <circle cx="184" cy="52" r="2.1"/><circle cx="202" cy="61" r="1.8"/>
+      <circle cx="172" cy="67" r="1.9"/><circle cx="194" cy="76" r="1.7"/>
+      <circle cx="212" cy="51" r="1.5"/><circle cx="178" cy="42" r="1.6"/>
+      <circle cx="214" cy="70" r="1.8"/><circle cx="164" cy="56" r="1.5"/>
+      <circle cx="204" cy="88" r="1.6"/><circle cx="182" cy="84" r="1.4"/>
+      <circle cx="192" cy="46" r="1.4"/><circle cx="168" cy="77" r="1.5"/>
+      <circle cx="222" cy="60" r="1.4"/><circle cx="190" cy="66" r="1.6"/>
+    </g>
+  </g>
+</svg>

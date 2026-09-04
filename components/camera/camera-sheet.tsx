@@ -1,12 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { limits } from "@/lib/config";
+import {
+  COLOUR_LENSES,
+  FACE_LENSES,
+  ORIGINAL,
+  filterCss,
+  isFaceLens,
+  type Lens,
+} from "@/lib/lenses/catalog";
 import { KeyboardInset } from "../keyboard-inset";
 import { FlipCameraIcon, SpinnerIcon, XIcon } from "../icons";
-import { ORIGINAL, PHOTO_FILTERS, filterCss, fit, renderFrame } from "../photo-filters";
+import { fit, renderFrame } from "../photo-filters";
+import { LensCarousel } from "./lens-carousel";
 
 /**
  * The camera: the whole screen, a live preview, and one shot on its way out of it.
@@ -15,11 +24,19 @@ import { ORIGINAL, PHOTO_FILTERS, filterCss, fit, renderFrame } from "../photo-f
  * both in `camera-launcher.tsx` — and it ends in one of the two places a picture can go
  * here: a story, or a post. No file picker anywhere in between.
  *
- * The strip is the same eight presets the DM composer offers, applied the same way: CSS
- * on the preview, `ctx.filter` on the bytes, so it cannot show one thing and send
- * another. A still keeps its unfiltered frame, so changing filter after the shutter
- * costs nothing; a clip is drawn through the filter as it records, because a recorded
- * video cannot be re-graded on the way out.
+ * One dial under the preview holds both kinds of lens, because turning it is one gesture
+ * either way, but they land at different moments:
+ *
+ *   - a **colour** preset is CSS on the preview and `ctx.filter` on the bytes, so what
+ *     gets sent is what was on screen. A still keeps its unfiltered frame and can be
+ *     re-graded freely; a clip is drawn through the filter as it records, because a
+ *     recorded video cannot be re-graded on the way out.
+ *   - a **face** lens is drawn by the server. It cannot be live — OpenCV finding a face
+ *     thirty times a second is not something a web dyno does — so the swatch shows the
+ *     art, and the effect lands when the shutter fires. After that it is one request per
+ *     lens tapped, and the unfiltered frame is still what gets sent up, so swapping horse
+ *     for uncle in review costs a round trip and nothing else. Stills only, for the same
+ *     reason: a sixty-second clip is eighteen hundred detections.
  *
  * Portalled to `document.body`. Both buttons that open it sit inside `glass-bar`
  * elements, and `backdrop-filter` makes an ancestor a containing block for fixed
@@ -31,6 +48,9 @@ import { ORIGINAL, PHOTO_FILTERS, filterCss, fit, renderFrame } from "../photo-f
 type Shot =
   | { kind: "IMAGE"; url: string; frame: HTMLCanvasElement }
   | { kind: "VIDEO"; url: string; file: File };
+
+/** A face lens as the server drew it, for the still currently in review. */
+type Render = { lens: string; url: string; file: File };
 
 type Mode = "photo" | "video";
 type Destination = "story" | "post";
@@ -57,6 +77,12 @@ const CLIP_TYPES = [
   "video/webm",
 ];
 
+/** What a baked still has to come out within, matching the upload route's own ceilings. */
+const CAPS = {
+  maxEdge: limits.maxImageEdge,
+  uploadMaxBytes: limits.maxUploadBytes,
+};
+
 export function CameraSheet({
   filters,
   onClose,
@@ -74,21 +100,48 @@ export function CameraSheet({
   const frame = useRef(0);
   /** The chosen filter, read once per drawn frame while recording. */
   const live = useRef("");
+  /**
+   * Which lens request is the current one.
+   *
+   * Tapping through four lenses quickly leaves four requests in flight, and they do not
+   * come back in order — a horse that finishes after the uncle it was replaced by would
+   * otherwise win. Only the newest sequence is allowed to land.
+   */
+  const seq = useRef(0);
 
   const [mode, setMode] = useState<Mode>("photo");
   const [facing, setFacing] = useState<"user" | "environment">("environment");
   const [mirrored, setMirrored] = useState(false);
   const [cameras, setCameras] = useState(1);
-  const [filter, setFilter] = useState(ORIGINAL);
+  const [lens, setLens] = useState(ORIGINAL);
   const [ready, setReady] = useState(false);
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [shot, setShot] = useState<Shot | null>(null);
+  const [render, setRender] = useState<Render | null>(null);
+  const [rendering, setRendering] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
   const [busy, setBusy] = useState<Destination | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const css = filterCss(filter);
+  const css = filterCss(lens);
+  /** The drawn version of the lens that is actually selected, if it is ready. */
+  const drawn = render && render.lens === lens ? render : null;
+
+  /**
+   * The dial, assembled from what is possible right now.
+   *
+   * Face lenses need a still, so they are absent from Video mode and from a clip in
+   * review. Colour presets need `ctx.filter`, so on a browser without it they are absent
+   * everywhere rather than shown and quietly not applied.
+   */
+  const faceable = shot ? shot.kind === "IMAGE" : mode === "photo";
+  const dial = useMemo(() => {
+    const list: Lens[] = [COLOUR_LENSES[0]!];
+    if (faceable) list.push(...FACE_LENSES);
+    if (filters) list.push(...COLOUR_LENSES.slice(1));
+    return list;
+  }, [faceable, filters]);
 
   /**
    * End a take.
@@ -200,6 +253,12 @@ export function CameraSheet({
     return () => URL.revokeObjectURL(shot.url);
   }, [shot]);
 
+  // Same for a drawn lens, which is replaced every time another one is tapped.
+  useEffect(() => {
+    if (!render) return;
+    return () => URL.revokeObjectURL(render.url);
+  }, [render]);
+
   // The clock on a take, and the ceiling on it. The server refuses anything longer, so
   // the take ends itself here rather than letting somebody film ninety seconds to be
   // told no afterwards.
@@ -230,11 +289,67 @@ export function CameraSheet({
     [],
   );
 
-  function choose(id: string) {
-    setFilter(id);
+  /**
+   * Turn the dial.
+   *
+   * A colour preset is instant — the string it carries is the whole effect. A face lens
+   * on a still already taken is a request, fired from here rather than from an effect
+   * watching the selection, which would be a setState in an effect and is also a worse
+   * description of what happened: a person tapped a thing.
+   *
+   * Turning it in the live view never renders anything. There is nothing to render yet.
+   */
+  async function choose(id: string) {
+    setLens(id);
     // Mirrored into a ref as well: the recording loop runs outside React and cannot read
     // state, and this is what it reads each frame.
     live.current = filterCss(id);
+    if (!isFaceLens(id) || shot?.kind !== "IMAGE") return;
+    const frameToSend = shot.frame;
+    await applyLens(id, () => renderFrame(frameToSend, "", CAPS));
+  }
+
+  /**
+   * Ask the server to draw a lens, and keep the result if it is still the wanted one.
+   *
+   * The unfiltered still is what goes up every time, never a previously drawn one —
+   * stacking a moustache onto a horse is not a lens, it is a mistake that cannot be
+   * undone. A failure puts the dial back on the original, so Send can never quietly
+   * despatch a picture without the effect that was asked for.
+   */
+  async function applyLens(id: string, source: () => Promise<File>) {
+    const mine = ++seq.current;
+    setRendering(id);
+    setError(null);
+    try {
+      const body = new FormData();
+      body.set("file", await source());
+      body.set("lens", id);
+      const res = await fetch("/api/lens", { method: "POST", body });
+      if (seq.current !== mine) return;
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(data.error ?? "That lens did not come out.");
+        setLens(ORIGINAL);
+        live.current = "";
+        setRendering(null);
+        return;
+      }
+      const blob = await res.blob();
+      if (seq.current !== mine) return;
+      setRender({
+        lens: id,
+        url: URL.createObjectURL(blob),
+        file: new File([blob], "lens.webp", { type: blob.type || "image/webp" }),
+      });
+      setRendering(null);
+    } catch {
+      if (seq.current !== mine) return;
+      setError("That lens did not come out.");
+      setLens(ORIGINAL);
+      live.current = "";
+      setRendering(null);
+    }
   }
 
   function flip() {
@@ -250,10 +365,20 @@ export function CameraSheet({
     setReady(false);
     setMode(next);
     setElapsed(0);
+    // A clip cannot carry a face lens, so one selected in Photo mode does not follow the
+    // dial into Video — better an obvious jump back to the original than a swatch that
+    // stays lit and does nothing.
+    if (next === "video" && isFaceLens(lens)) {
+      setLens(ORIGINAL);
+      live.current = "";
+    }
   }
 
   function retake() {
+    seq.current += 1;
     setShot(null);
+    setRender(null);
+    setRendering(null);
     setCaption("");
     setError(null);
     setElapsed(0);
@@ -276,8 +401,9 @@ export function CameraSheet({
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
     }
-    // Deliberately unfiltered. `renderFrame` bakes whichever filter is chosen at the
-    // moment Send is pressed, which is what keeps the strip under a still live.
+    // Deliberately unfiltered. `renderFrame` bakes whichever colour preset is chosen at
+    // the moment Send is pressed, and a face lens goes up as it is — which is what keeps
+    // the dial under a still live.
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(
       (blob) => {
@@ -286,6 +412,12 @@ export function CameraSheet({
           return;
         }
         setShot({ kind: "IMAGE", url: URL.createObjectURL(blob), frame: canvas });
+        // Where a face lens was already chosen in the viewfinder, this is the moment it
+        // becomes real. The blob is the still, so nothing has to be re-encoded for it.
+        if (isFaceLens(lens)) {
+          const file = new File([blob], "shot.webp", { type: blob.type || "image/webp" });
+          void applyLens(lens, async () => file);
+        }
       },
       "image/webp",
       0.92,
@@ -368,17 +500,25 @@ export function CameraSheet({
 
   /** Off to one of the two places this ends. */
   async function send(destination: Destination) {
-    if (!shot || busy) return;
+    if (!shot || busy || rendering) return;
     setBusy(destination);
     setError(null);
     try {
-      const file =
-        shot.kind === "IMAGE"
-          ? await renderFrame(shot.frame, css, {
-              maxEdge: limits.maxImageEdge,
-              uploadMaxBytes: limits.maxUploadBytes,
-            })
-          : shot.file;
+      // Three sources, one per kind of lens: a clip is already what it is, a face lens is
+      // the bytes the server sent back, and a colour preset is baked here and now.
+      let file: File;
+      if (shot.kind === "VIDEO") {
+        file = shot.file;
+      } else if (isFaceLens(lens)) {
+        if (!drawn) {
+          setError("That lens did not come out.");
+          setBusy(null);
+          return;
+        }
+        file = drawn.file;
+      } else {
+        file = await renderFrame(shot.frame, css, CAPS);
+      }
       if (file.size > limits.maxUploadBytes) {
         setError("That is too big to upload.");
         setBusy(null);
@@ -458,7 +598,7 @@ export function CameraSheet({
           {shot?.kind === "IMAGE" ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={shot.url}
+              src={drawn ? drawn.url : shot.url}
               alt=""
               style={{ filter: css || undefined }}
               className="h-full w-full object-contain"
@@ -490,40 +630,18 @@ export function CameraSheet({
 
           {shot ? (
             <>
-              {/* Only a still gets a strip. A clip was drawn through its filter as it
-                  recorded, and there is nothing left to change. */}
-              {shot.kind === "IMAGE" && filters ? (
-                <ul className="no-bar mx-auto mb-2 flex max-w-full gap-1.5 overflow-x-auto">
-                  {PHOTO_FILTERS.map((preset) => {
-                    const on = preset.id === filter;
-                    return (
-                      <li key={preset.id} className="shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => choose(preset.id)}
-                          disabled={busy !== null}
-                          aria-pressed={on}
-                          className={`flex w-[46px] flex-col items-center gap-1 rounded-ctl p-[3px] transition-colors ${
-                            on ? "bg-panel-3" : "hover:bg-panel-2"
-                          }`}
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={shot.url}
-                            alt=""
-                            style={{ filter: preset.css || undefined }}
-                            className={`h-10 w-10 rounded-ctl border object-cover ${
-                              on ? "border-ink" : "border-line-strong"
-                            }`}
-                          />
-                          <span className={`text-[9px] leading-none ${on ? "text-ink" : "text-faint"}`}>
-                            {preset.label}
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
+              {/* A clip gets no dial. It was drawn through its colour preset as it
+                  recorded, and a face lens was never on offer for it. */}
+              {shot.kind === "IMAGE" && dial.length > 1 ? (
+                <div className="mb-2">
+                  <LensCarousel
+                    lenses={dial}
+                    value={lens}
+                    rendering={rendering}
+                    disabled={busy !== null}
+                    onChange={(id) => void choose(id)}
+                  />
+                </div>
               ) : null}
 
               <input
@@ -547,7 +665,7 @@ export function CameraSheet({
                 <button
                   type="button"
                   onClick={() => void send("story")}
-                  disabled={busy !== null}
+                  disabled={busy !== null || rendering !== null}
                   className="ml-auto flex h-9 items-center gap-2 rounded-ctl border border-line-strong px-4 text-sm font-medium text-ink transition-colors hover:bg-panel-2 disabled:opacity-60"
                 >
                   {busy === "story" ? <SpinnerIcon className="h-4 w-4 animate-spin" /> : null}
@@ -556,7 +674,7 @@ export function CameraSheet({
                 <button
                   type="button"
                   onClick={() => void send("post")}
-                  disabled={busy !== null}
+                  disabled={busy !== null || rendering !== null}
                   className="flex h-9 items-center gap-2 rounded-ctl bg-accent px-5 text-sm font-semibold text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-60"
                 >
                   {busy === "post" ? <SpinnerIcon className="h-4 w-4 animate-spin" /> : null}
@@ -566,31 +684,19 @@ export function CameraSheet({
             </>
           ) : (
             <>
-              {/* Labels only here, no thumbnails: the preview behind them is already the
-                  swatch, at full size. Live through a take as well — that is what makes a
-                  filter an effect on a clip rather than a decision before one. */}
-              {filters ? (
-                <ul className="no-bar mx-auto flex max-w-full gap-1.5 overflow-x-auto">
-                  {PHOTO_FILTERS.map((preset) => {
-                    const on = preset.id === filter;
-                    return (
-                      <li key={preset.id} className="shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => choose(preset.id)}
-                          aria-pressed={on}
-                          className={`h-7 rounded-pill border px-3 text-[11px] font-medium transition-colors ${
-                            on
-                              ? "border-accent bg-accent text-accent-ink"
-                              : "border-line-strong bg-panel/70 text-muted hover:text-ink"
-                          }`}
-                        >
-                          {preset.label}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
+              {/* The same dial as in review, live. A colour preset changes the preview on
+                  the spot and stays live through a take — that is what makes it an effect
+                  on a clip rather than a decision before one. A face lens cannot show
+                  itself here, so its swatch is the promise and the shutter is where it
+                  is kept. */}
+              {dial.length > 1 ? (
+                <LensCarousel
+                  lenses={dial}
+                  value={lens}
+                  rendering={rendering}
+                  disabled={recording}
+                  onChange={(id) => void choose(id)}
+                />
               ) : null}
 
               <div className="mt-3 flex justify-center">

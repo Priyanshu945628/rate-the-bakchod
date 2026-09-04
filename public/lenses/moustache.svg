@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 120" width="280" height="120">
+  <!-- Handlebar, wings curling up. Sits under the nose. -->
+  <defs>
+    <linearGradient id="hair" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b2f2a"/>
+      <stop offset="1" stop-color="#191311"/>
+    </linearGradient>
+  </defs>
+  <path d="M140,24 C126,24 114,32 102,42 C80,58 52,62 30,52 C22,48 16,42 12,34
+           C10,58 20,82 42,94 C66,107 98,102 118,82 C126,74 134,66 140,58
+           C146,66 154,74 162,82 C182,102 214,107 238,94 C260,82 270,58 268,34
+           C264,42 258,48 250,52 C228,62 200,58 178,42 C166,32 154,24 140,24 Z"
+        fill="url(#hair)"/>
+  <path d="M120,44 C100,58 74,64 50,58" stroke="#5a4740" stroke-width="4" fill="none"
+        stroke-linecap="round" opacity="0.55"/>
+  <path d="M160,44 C180,58 206,64 230,58" stroke="#5a4740" stroke-width="4" fill="none"
+        stroke-linecap="round" opacity="0.55"/>
+</svg>

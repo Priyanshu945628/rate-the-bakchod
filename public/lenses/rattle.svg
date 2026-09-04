@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 210" width="150" height="210">
+  <!-- Sticker, dropped in a corner of the frame. -->
+  <defs>
+    <linearGradient id="bead" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe6f0"/>
+      <stop offset="1" stop-color="#f3a8c6"/>
+    </linearGradient>
+    <linearGradient id="stick" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bfe3f7"/>
+      <stop offset="1" stop-color="#7fc0e6"/>
+    </linearGradient>
+  </defs>
+  <rect x="62" y="96" width="26" height="98" rx="13" fill="url(#stick)"/>
+  <circle cx="75" cy="70" r="62" fill="url(#bead)" stroke="#ffffff" stroke-width="5"/>
+  <circle cx="54" cy="52" r="16" fill="#ffffff" opacity="0.55"/>
+  <circle cx="96" cy="86" r="9" fill="#e07fa8" opacity="0.6"/>
+  <circle cx="60" cy="94" r="7" fill="#e07fa8" opacity="0.5"/>
+  <path d="M50,190 C36,178 30,196 46,200 C58,203 70,196 75,188 C80,196 92,203 104,200
+           C120,196 114,178 100,190 C90,198 82,200 75,196 C68,200 60,198 50,190 Z"
+        fill="#ffd166"/>
+</svg>

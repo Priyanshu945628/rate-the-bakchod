@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 110" width="280" height="110">
+  <!-- Round gold rims. Eye-anchored art keeps its eyes at 25% and 75% of the width, so
+       rendering this at twice the measured eye span lands the lenses on the eyes. -->
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8ca77"/>
+      <stop offset="0.5" stop-color="#c69b3c"/>
+      <stop offset="1" stop-color="#8f6c22"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#cfe0f0" stop-opacity="0.3"/>
+      <stop offset="0.55" stop-color="#7f93a8" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#e8f1fa" stop-opacity="0.26"/>
+    </linearGradient>
+  </defs>
+  <path d="M30,50 C18,44 8,42 0,44" stroke="url(#gold)" stroke-width="6" fill="none"
+        stroke-linecap="round"/>
+  <path d="M250,50 C262,44 272,42 280,44" stroke="url(#gold)" stroke-width="6" fill="none"
+        stroke-linecap="round"/>
+  <path d="M111,46 C130,33 150,33 169,46" stroke="url(#gold)" stroke-width="6" fill="none"
+        stroke-linecap="round"/>
+  <circle cx="70" cy="55" r="40" fill="url(#glass)"/>
+  <circle cx="210" cy="55" r="40" fill="url(#glass)"/>
+  <circle cx="70" cy="55" r="40" fill="none" stroke="url(#gold)" stroke-width="7"/>
+  <circle cx="210" cy="55" r="40" fill="none" stroke="url(#gold)" stroke-width="7"/>
+  <path d="M50,34 C58,26 70,22 82,24" stroke="#ffffff" stroke-width="5" fill="none"
+        stroke-linecap="round" opacity="0.4"/>
+  <path d="M190,34 C198,26 210,22 222,24" stroke="#ffffff" stroke-width="5" fill="none"
+        stroke-linecap="round" opacity="0.4"/>
+</svg>

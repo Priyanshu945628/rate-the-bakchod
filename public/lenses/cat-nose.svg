@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 150" width="340" height="150">
+  <!-- Nose, muzzle dots and whiskers. Centred on the nose tip. -->
+  <g stroke="#f7f5f2" stroke-width="5" stroke-linecap="round" opacity="0.92" fill="none">
+    <path d="M126,66 C96,54 62,48 24,50"/>
+    <path d="M124,80 C92,78 58,84 22,96"/>
+    <path d="M128,92 C100,100 70,114 40,132"/>
+    <path d="M214,66 C244,54 278,48 316,50"/>
+    <path d="M216,80 C248,78 282,84 318,96"/>
+    <path d="M212,92 C240,100 270,114 300,132"/>
+  </g>
+  <path d="M170,50 C188,50 202,58 202,69 C202,84 182,98 170,98 C158,98 138,84 138,69
+           C138,58 152,50 170,50 Z" fill="#e0899d"/>
+  <path d="M170,98 L170,112 M170,112 C160,124 144,124 136,114 M170,112 C180,124 196,124 204,114"
+        stroke="#3a2c2c" stroke-width="5" fill="none" stroke-linecap="round" opacity="0.7"/>
+  <g fill="#3a2c2c" opacity="0.35">
+    <circle cx="126" cy="112" r="4"/><circle cx="110" cy="126" r="4"/>
+    <circle cx="146" cy="128" r="4"/><circle cx="214" cy="112" r="4"/>
+    <circle cx="230" cy="126" r="4"/><circle cx="194" cy="128" r="4"/>
+  </g>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="glamlip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8536d"/>
+      <stop offset="1" stop-color="#b02a44"/>
+    </linearGradient>
+  </defs>
+  <g stroke="#171314" stroke-width="4.5" fill="none" stroke-linecap="round" opacity="0.85">
+    <path d="M22,40 C30,28 42,22 54,24"/>
+    <path d="M24,34 C21,29 19,25 18,21"/>
+    <path d="M36,26 C34,21 33,17 33,13"/>
+  </g>
+  <path d="M26,72 C44,54 58,52 74,64 C90,52 100,54 108,70 C92,74 74,74 66,72
+           C56,74 40,76 26,72 Z" fill="url(#glamlip)"/>
+  <path d="M26,74 C42,98 58,108 68,108 C80,108 96,96 108,72 C90,82 78,86 66,86
+           C54,86 40,82 26,74 Z" fill="url(#glamlip)"/>
+  <path d="M48,94 C56,99 76,99 84,94" stroke="#ffffff" stroke-width="5" fill="none"
+        stroke-linecap="round" opacity="0.3"/>
+  <path d="M92,18 C94,28 97,31 107,33 C97,35 94,38 92,48 C90,38 87,35 77,33
+           C87,31 90,28 92,18 Z" fill="#ffeab4"/>
+</svg>

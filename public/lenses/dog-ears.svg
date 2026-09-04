@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 300" width="340" height="300">
+  <!-- Two long ears that drape beside the face, and nothing joining them across the top:
+       a band there reads as a hat rather than as ears. Anchored on the eye line. -->
+  <defs>
+    <linearGradient id="fur" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c58a4e"/>
+      <stop offset="1" stop-color="#8d5c2c"/>
+    </linearGradient>
+  </defs>
+  <path d="M96,26 C48,16 12,58 8,124 C4,186 26,258 62,278 C92,294 106,258 104,206
+           C102,150 108,72 104,44 C102,32 100,27 96,26 Z" fill="url(#fur)"/>
+  <path d="M244,26 C292,16 328,58 332,124 C336,186 314,258 278,278 C248,294 234,258 236,206
+           C238,150 232,72 236,44 C238,32 240,27 244,26 Z" fill="url(#fur)"/>
+  <path d="M94,52 C58,46 30,84 27,136 C24,182 40,238 66,252 C86,262 94,230 93,190
+           C92,148 96,70 94,52 Z" fill="#a86f38" opacity="0.5"/>
+  <path d="M246,52 C282,46 310,84 313,136 C316,182 300,238 274,252 C254,262 246,230 247,190
+           C248,148 244,70 246,52 Z" fill="#a86f38" opacity="0.5"/>
+</svg>

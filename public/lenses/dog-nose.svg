@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 130" width="180" height="130">
+  <!-- Snout fur with a wet nose on top. Centred on the nose tip. -->
+  <defs>
+    <radialGradient id="snout" cx="0.5" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#e0b483"/>
+      <stop offset="1" stop-color="#bd8a55"/>
+    </radialGradient>
+    <linearGradient id="leather" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3c2b26"/>
+      <stop offset="1" stop-color="#1d1412"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="90" cy="74" rx="82" ry="52" fill="url(#snout)"/>
+  <path d="M90,34 C112,34 128,44 128,58 C128,76 106,92 90,92 C74,92 52,76 52,58
+           C52,44 68,34 90,34 Z" fill="url(#leather)"/>
+  <ellipse cx="72" cy="52" rx="8" ry="5" fill="#ffffff" opacity="0.35"
+           transform="rotate(-18 72 52)"/>
+  <path d="M90,92 L90,118" stroke="#8f6134" stroke-width="6" stroke-linecap="round"/>
+</svg>

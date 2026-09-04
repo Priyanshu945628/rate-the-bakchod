@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 250" width="300" height="250">
+  <!-- Full beard: wide at the sideburns, hanging past the chin. Anchored at the mouth,
+       offset down so the top edge meets the upper lip. -->
+  <defs>
+    <linearGradient id="beard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a2e29"/>
+      <stop offset="0.7" stop-color="#221a17"/>
+      <stop offset="1" stop-color="#171110"/>
+    </linearGradient>
+  </defs>
+  <path d="M16,10 C20,84 50,178 88,216 C112,240 150,250 174,242 C214,229 254,166 276,84
+           C282,60 285,32 286,10 C258,58 218,84 178,94 C154,100 126,100 102,94
+           C66,84 38,54 16,10 Z" fill="url(#beard)"/>
+  <g stroke="#4d3d36" stroke-width="3.5" fill="none" opacity="0.5" stroke-linecap="round">
+    <path d="M60,60 C76,110 96,164 122,200"/>
+    <path d="M108,86 C114,138 122,186 136,220"/>
+    <path d="M244,60 C228,110 208,164 182,200"/>
+    <path d="M196,86 C190,138 182,186 168,220"/>
+    <path d="M152,96 L152,228"/>
+  </g>
+</svg>

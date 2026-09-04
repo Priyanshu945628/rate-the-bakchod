@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 640" width="400" height="640">
+  <!-- Bokeh and a corner leak, for a screen blend over the whole frame. -->
+  <defs>
+    <radialGradient id="bokeh" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="0.72" stop-color="#ffe4c4" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#ffd9b0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="leak" cx="0.08" cy="0.06" r="0.7">
+      <stop offset="0" stop-color="#ffd9a1" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#ffbf80" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="400" height="640" fill="url(#leak)"/>
+  <circle cx="72" cy="118" r="56" fill="url(#bokeh)"/>
+  <circle cx="326" cy="86" r="40" fill="url(#bokeh)"/>
+  <circle cx="356" cy="248" r="64" fill="url(#bokeh)"/>
+  <circle cx="46" cy="352" r="34" fill="url(#bokeh)"/>
+  <circle cx="290" cy="470" r="50" fill="url(#bokeh)"/>
+  <circle cx="96" cy="536" r="44" fill="url(#bokeh)"/>
+  <circle cx="206" cy="604" r="30" fill="url(#bokeh)"/>
+</svg>
