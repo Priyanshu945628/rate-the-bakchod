@@ -31,10 +31,22 @@ export interface Sealed {
   tag: Buffer;
 }
 
+/**
+ * A master key that is missing or the wrong shape.
+ *
+ * Named rather than a bare `Error` so `errorTag` can put "MasterKeyError" in a 500 —
+ * every message below says which variable and why, and none of that can be shown to
+ * a client. Without the name the response is a sentence with nothing in it, and this
+ * is one of the two ways a correct deploy still fails to accept an upload.
+ */
+export class MasterKeyError extends Error {
+  override name = "MasterKeyError";
+}
+
 /** Parse and validate the base64 master key from the environment. */
 export function loadMasterKey(raw: string | undefined): Buffer {
   if (!raw) {
-    throw new Error(
+    throw new MasterKeyError(
       "MEDIA_MASTER_KEY is not set. Generate one with:\n" +
         `  node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`,
     );
@@ -43,10 +55,10 @@ export function loadMasterKey(raw: string | undefined): Buffer {
   try {
     key = Buffer.from(raw, "base64");
   } catch {
-    throw new Error("MEDIA_MASTER_KEY is not valid base64.");
+    throw new MasterKeyError("MEDIA_MASTER_KEY is not valid base64.");
   }
   if (key.length !== KEY_BYTES) {
-    throw new Error(
+    throw new MasterKeyError(
       `MEDIA_MASTER_KEY must decode to exactly ${KEY_BYTES} bytes, got ${key.length}.`,
     );
   }

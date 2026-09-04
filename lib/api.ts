@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import { UnauthorizedError, requireUser } from "./auth";
 import { PostServiceError } from "./posts";
 import { MediaError } from "./media/pipeline";
+import { errorTag } from "./error-tag";
 import { consumeRateLimit } from "./ratelimit";
 import type { RateLimitBucket } from "./config";
 import type { User } from "@prisma/client";
@@ -23,9 +24,16 @@ export function handleRouteError(err: unknown): NextResponse {
   if (err instanceof PostServiceError) return jsonError(err.message, err.status);
   if (err instanceof MediaError) return jsonError(err.message, 415);
 
-  // Anything unrecognised is a bug. Log it in full, tell the client nothing.
+  // Anything unrecognised is a bug. Log it in full, and tell the client only what
+  // kind of bug it was: on a deployed box the log is the one place the cause exists,
+  // and a log line can carry a connection string, so the code has to travel in the
+  // response instead. `errorTag` is the part that is safe to show.
   console.error("[api] unhandled error:", err);
-  return jsonError("Something broke on our side.", 500);
+  const tag = errorTag(err);
+  return jsonError(
+    tag ? `Something broke on our side. (${tag})` : "Something broke on our side.",
+    500,
+  );
 }
 
 /**
