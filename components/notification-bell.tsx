@@ -41,7 +41,7 @@ export function NotificationBell({ initialUnread }: { initialUnread: number }) {
         here ? "bg-panel-3 text-ink" : "text-muted hover:bg-panel-2 hover:text-ink"
       }`}
     >
-      <BellIcon className="h-4 w-4" />
+      <BellIcon className="h-5 w-5" />
       {unread > 0 && (
         <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-pill bg-ink px-1 text-[10px] font-bold tabular-nums text-panel">
           {unread > 99 ? "99+" : unread}

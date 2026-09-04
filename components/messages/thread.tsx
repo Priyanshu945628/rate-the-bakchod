@@ -822,9 +822,9 @@ function Header({
       <Link
         href="/messages"
         aria-label="Back to conversations"
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-ctl text-muted transition-colors hover:bg-panel-2 hover:text-ink lg:hidden"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-ctl text-muted transition-colors hover:bg-panel-2 hover:text-ink lg:hidden"
       >
-        <ChevronLeftIcon className="h-4 w-4" />
+        <ChevronLeftIcon className="h-5 w-5" />
       </Link>
 
       <Link
@@ -916,9 +916,9 @@ function CallButton({
           if (message) onError(message);
         });
       }}
-      className="flex h-8 w-8 items-center justify-center rounded-ctl text-muted transition-colors hover:bg-panel-2 hover:text-ink disabled:opacity-40"
+      className="flex h-9 w-9 items-center justify-center rounded-ctl text-muted transition-colors hover:bg-panel-2 hover:text-ink disabled:opacity-40"
     >
-      <Icon className="h-4 w-4" />
+      <Icon className="h-5 w-5" />
     </button>
   );
 }

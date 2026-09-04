@@ -73,7 +73,7 @@ export function InstallApp() {
       aria-label="Install app"
       className="flex h-9 w-9 items-center justify-center rounded-ctl text-muted transition-colors hover:bg-panel-2 hover:text-ink"
     >
-      <InstallIcon className="h-4 w-4" />
+      <InstallIcon className="h-5 w-5" />
     </button>
   );
 }

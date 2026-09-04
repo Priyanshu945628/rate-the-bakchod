@@ -44,7 +44,7 @@ export function CameraButton({ variant }: { variant: "bar" | "tab" }) {
         }
       >
         {variant === "bar" ? (
-          <CameraIcon className="h-4 w-4" />
+          <CameraIcon className="h-5 w-5" />
         ) : (
           <>
             <PlusIcon className="h-5 w-5" />

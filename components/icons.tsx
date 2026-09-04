@@ -18,19 +18,32 @@
  * ## Sizes
  *
  * A glyph is sized by the job it does, not by the space that happens to be free,
- * and only these five steps exist:
+ * and only these steps exist:
  *
- * | class   | px | for                                                     |
- * |---------|----|---------------------------------------------------------|
- * | `h-3`   | 12 | sitting in a line of text — read ticks, counter marks   |
- * | `h-3.5` | 14 | a dense control, or a spinner in a panel header          |
- * | `h-4`   | 16 | **the default** — any control in a 28–36px tile          |
- * | `h-5`   | 20 | navigation, and controls in a 40px tile or larger        |
- * | `h-6`   | 24 | display — an empty state, or a control over full media   |
+ * | class   | px | for                                                       |
+ * |---------|----|-----------------------------------------------------------|
+ * | `h-2.5` | 10 | a badge under 20px — the clear dot on a lens swatch        |
+ * | `h-3`   | 12 | sitting in a line of text — read ticks, counter marks      |
+ * | `h-3.5` | 14 | a dense control, or a spinner in a panel header            |
+ * | `h-4`   | 16 | **the default** — a control inside a panel, 28–36px tile   |
+ * | `h-5`   | 20 | chrome and navigation, and any control in a 40px tile      |
+ * | `h-6`   | 24 | display — an empty state, or a call control                |
+ * | `h-8`   | 32 | a display badge in a 64px disc — a held story's play mark  |
  *
  * The working rule behind the table is half the tile, rounded onto the ladder. An
  * arbitrary size — `h-[18px]`, `h-[22px]` — always looks like a mistake next to a
  * neighbour that took a step, because it is one.
+ *
+ * Chrome is the one exception, and it goes the other way: the bars that frame every
+ * page — the rail, the top bar, a thread's header — take 20px whatever their tiles
+ * measure. Half of a 36px tile is 18, which rounds to 16, and a 16px glyph in the top
+ * bar loses badly against the 20px one in the rail immediately beside it. Two pixels of
+ * padding is the cheaper thing to give up.
+ *
+ * Two glyphs are sized as a fraction instead — the fallback initial-less mark in
+ * `avatar.tsx` and the add-story plus in `story-tray.tsx`. Both live inside something
+ * drawn at several diameters on the same page, so they scale with it rather than picking
+ * a rung and being wrong at two of the three sizes.
  */
 
 interface IconProps {
