@@ -37,6 +37,7 @@ import { ClockTime, DayLabel, TimeAgo, useRecent, utcDay } from "../time-ago";
 import { useDismiss } from "../use-dismiss";
 import { useRealtime } from "../realtime-provider";
 import { ViewableImage } from "../photo-viewer";
+import { LinkCard } from "./link-card";
 import { Linkified } from "./linkify";
 import {
   ORIGINAL,
@@ -651,9 +652,14 @@ function Bubble({
             ) : deleted ? (
               <p className="text-[13px] italic text-faint">Unsent</p>
             ) : body ? (
-              <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink">
-                <Linkified text={body} />
-              </p>
+              <>
+                <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink">
+                  <Linkified text={body} />
+                </p>
+                {/* Renders nothing unless the body has a link and that link had
+                    something to say, so every other message pays one regex for it. */}
+                <LinkCard text={body} />
+              </>
             ) : null}
           </div>
 

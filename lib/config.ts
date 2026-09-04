@@ -198,6 +198,16 @@ export const rateLimits = {
    * can exhaust is a budget that breaks calling.
    */
   call: { max: 30, windowSec: 3600 },
+  /**
+   * Unfurling a pasted link. Metered because it is the one request in the app that
+   * makes the server fetch an address a stranger chose, and the cost is not the
+   * reader's to spend — the limit is per viewer, but the bandwidth is ours.
+   *
+   * High, because the meter counts *reads*, not links: the result is cached server
+   * side and in the browser, so scrolling the same thread twice spends almost
+   * nothing, while a thread that is nothing but links still unfurls.
+   */
+  linkPreview: { max: 120, windowSec: 3600 },
 } as const;
 
 export type RateLimitBucket = keyof typeof rateLimits;

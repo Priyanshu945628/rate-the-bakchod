@@ -356,6 +356,27 @@ export interface ClientMessage {
 }
 
 /**
+ * What a pasted link turns out to be.
+ *
+ * Fetched separately from the message rather than stored on it, because a message
+ * is what somebody typed and this is what a website happened to say at the time —
+ * one is history and the other is a lookup that can fail, expire or change.
+ *
+ * `icon` is a `data:` URL, not the remote one. The server has already been to that
+ * host; sending the reader there too would let the site count everyone in the
+ * thread who scrolled past the link.
+ */
+export interface ClientLinkPreview {
+  /** The address that was actually fetched, redirects followed. */
+  url: string;
+  /** Lowercased, `www.` dropped. Drawn in caps by the card. */
+  host: string;
+  title: string | null;
+  description: string | null;
+  icon: string | null;
+}
+
+/**
  * A call as it appears in the timeline, between the messages.
  *
  * Calls and messages are separate tables, so the thread interleaves them by

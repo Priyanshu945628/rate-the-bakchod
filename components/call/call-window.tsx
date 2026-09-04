@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Avatar } from "../avatar";
 import {
   CameraOffIcon,
@@ -34,15 +34,27 @@ import { useCall } from "./call-provider";
  * an attribute and React will not set it from a prop. The local one is always muted —
  * it is the same microphone the room already contains, and unmuted it is a feedback
  * loop.
+ *
+ * A *callback* ref, and that distinction is the whole reason their picture used to be
+ * a black rectangle. The remote element is only mounted once the call is live (see
+ * `showRemote`), which is well after the remote stream reaches state — so an effect
+ * keyed on the stream ran while the element did not exist yet, and never ran again,
+ * because the stream's identity had not changed. A callback ref fires on both edges:
+ * when the element mounts, and whenever the stream it is being handed changes.
  */
 
-function useMediaRef<T extends HTMLMediaElement>(stream: MediaStream | null) {
-  const ref = useRef<T | null>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (el && el.srcObject !== stream) el.srcObject = stream;
-  }, [stream]);
-  return ref;
+function useMediaRef(stream: MediaStream | null) {
+  return useCallback(
+    (node: HTMLMediaElement | null) => {
+      if (!node) return;
+      if (node.srcObject !== stream) node.srcObject = stream;
+      // `autoplay` starts an element that already has a source when it mounts, but
+      // one whose source is swapped afterwards can be left paused. Asking costs
+      // nothing, and a rejection here only means autoplay was refused.
+      if (stream) void node.play().catch(() => {});
+    },
+    [stream],
+  );
 }
 
 /** Seconds since the call connected. Its own ticker: 30s resolution is not a timer. */
@@ -106,15 +118,22 @@ export function CallWindow() {
   const live = call?.status === "live";
   const reconnecting = call?.status === "reconnecting";
   const elapsed = useElapsed(live || reconnecting);
-  const remoteVideo = useMediaRef<HTMLVideoElement>(remote);
-  const localVideo = useMediaRef<HTMLVideoElement>(local);
-  const remoteAudio = useMediaRef<HTMLAudioElement>(remote);
+  const remoteVideo = useMediaRef(remote);
+  const localVideo = useMediaRef(local);
+  const remoteAudio = useMediaRef(remote);
 
   if (!call || call.status === "incoming") return null;
 
   const video = call.kind === "VIDEO";
-  /** Their picture is only worth showing once there is one and the camera is on. */
-  const showRemote = video && (live || reconnecting);
+  /**
+   * Their picture is only worth showing once there is one.
+   *
+   * The stream is part of the condition rather than assumed from the status: a black
+   * rectangle where a face should be reads as a broken call, while the avatar stage
+   * with the timer running reads as a call whose picture has not arrived — which is
+   * what it is.
+   */
+  const showRemote = video && remote !== null && (live || reconnecting);
 
   const status = live
     ? clock(elapsed)
@@ -187,7 +206,10 @@ export function CallWindow() {
                 ) : null}
               </span>
             </div>
-            {video ? null : <audio ref={remoteAudio} autoPlay muted={speakerOff} />}
+            {/* Whenever the picture is not on screen — a voice call, or a video call
+                whose stream has not arrived yet. Their audio has to come out of
+                something, and on a video call the `<video>` above is that something. */}
+            <audio ref={remoteAudio} autoPlay muted={speakerOff} />
           </>
         )}
 

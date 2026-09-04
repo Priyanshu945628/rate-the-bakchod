@@ -247,13 +247,26 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       const conn = new RTCPeerConnection({ iceServers: await loadIce() });
       for (const track of media.getTracks()) conn.addTrack(track, media);
 
-      // One stream object for the whole call, added to as tracks arrive. A `<video>`
-      // follows a live `srcObject`, so audio landing after video needs no re-render —
-      // and swapping the object out would restart playback.
-      const inbound = new MediaStream();
-      setRemote(inbound);
+      // Their media, as the connection reports it. `event.streams[0]` is the stream
+      // the far end grouped its tracks into — the same object for their microphone and
+      // their camera, so in practice this is one state change per call and React bails
+      // out of the second.
+      //
+      // Deliberately not an empty `new MediaStream()` published up front and filled in
+      // as tracks arrive. That object reaches state with nothing in it, and a browser
+      // handed a trackless stream has no picture to decode: some never repaint when
+      // tracks turn up afterwards, which is a black rectangle for the whole call.
+      const fallback = new MediaStream();
       conn.addEventListener("track", (event) => {
-        inbound.addTrack(event.track);
+        const [inbound] = event.streams;
+        if (inbound) {
+          setRemote(inbound);
+          return;
+        }
+        // No stream reported — legal, and then the tracks are ours to group. A fresh
+        // object each time, so the element re-attaches instead of keeping a stale one.
+        fallback.addTrack(event.track);
+        setRemote(new MediaStream(fallback.getTracks()));
       });
 
       conn.addEventListener("icecandidate", (event) => {

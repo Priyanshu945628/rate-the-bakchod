@@ -4,8 +4,8 @@ import "server-only";
  * Notifications.
  *
  * One place decides three things that must not drift apart: whether an event is
- * worth a row at all, what that row *says*, and where clicking it goes. The bell
- * dropdown renders `text` and `href` verbatim — it never assembles a sentence —
+ * worth a row at all, what that row *says*, and where clicking it goes. The panel
+ * renders `text` and `href` verbatim — it never assembles a sentence —
  * because the same row also travels down the realtime stream, and a client that
  * phrased its own copy would show one wording live and a different one after a
  * reload.
@@ -22,7 +22,7 @@ import { prisma } from "./prisma";
 import { hasListener, publish } from "./realtime";
 import type { ClientNotification, ClientNotificationPage } from "./types";
 
-/** How many rows the bell asks for at a time. */
+/** How many rows the panel asks for at a time. */
 const PAGE_SIZE = 20;
 
 /**
@@ -455,7 +455,7 @@ export async function unreadCount(userId: string): Promise<number> {
 }
 
 /**
- * A page of the bell, newest first.
+ * A page of notifications, newest first.
  *
  * The unread total rides along with the rows rather than being a second request:
  * the badge and the list are one thing on screen, and fetching them separately
