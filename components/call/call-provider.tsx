@@ -108,6 +108,34 @@ export function useCall(): CallApi {
 /** Last-resort STUN, used only if `/api/calls/ice` cannot be reached. */
 const FALLBACK_ICE: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
+/** The capture size asked for, as long edge and short edge — 720p either way up. */
+const CAPTURE_LONG = 1280;
+const CAPTURE_SHORT = 720;
+
+/**
+ * What to ask the camera for, in the shape the device is being held.
+ *
+ * Asking for `1280×720` whatever the device is doing is what makes a call from a phone
+ * arrive sideways: the constraint itself is landscape, so the phone hands over a
+ * landscape frame however it is held, and the far end — a portrait screen — can only
+ * fill itself by cropping a strip out of the middle of somebody's face.
+ *
+ * Portrait is asked for only where the screen is upright *and* the pointer is coarse, so
+ * a webcam over a tall desktop window keeps the landscape frame it actually has. Both
+ * numbers stay `ideal`: a camera that can do neither shape should open with what it has
+ * rather than fail the whole call with `OverconstrainedError`.
+ */
+function videoConstraints(facingMode: "user" | "environment"): MediaTrackConstraints {
+  const portrait =
+    window.matchMedia("(orientation: portrait)").matches &&
+    window.matchMedia("(pointer: coarse)").matches;
+  return {
+    facingMode,
+    width: { ideal: portrait ? CAPTURE_SHORT : CAPTURE_LONG },
+    height: { ideal: portrait ? CAPTURE_LONG : CAPTURE_SHORT },
+  };
+}
+
 function post(body: Record<string, unknown>): Promise<Response> {
   return fetch("/api/calls", {
     method: "POST",
@@ -200,10 +228,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const getMedia = useCallback(async (kind: CallKindName): Promise<MediaStream> => {
     const media = await navigator.mediaDevices.getUserMedia({
       audio: true,
-      video:
-        kind === "VIDEO"
-          ? { facingMode: facing.current, width: { ideal: 1280 }, height: { ideal: 720 } }
-          : false,
+      video: kind === "VIDEO" ? videoConstraints(facing.current) : false,
     });
     stream.current = media;
     setLocal(media);
@@ -482,7 +507,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       let fresh: MediaStream;
       try {
         fresh = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: next, width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: videoConstraints(next),
         });
       } catch {
         // One camera after all, or permission withdrawn mid-call. Keep the picture

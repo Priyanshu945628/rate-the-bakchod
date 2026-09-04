@@ -148,12 +148,17 @@ export function CallWindow() {
     >
       <div className="relative min-h-0 flex-1">
         {showRemote ? (
+          // `object-contain`, so a frame that is not the shape of this screen gets bars
+          // rather than a haircut. The sender is asked for a picture the right way up
+          // (see `videoConstraints`), but nothing stops the other end being a laptop,
+          // or a phone being turned over mid-call, and the failure mode of `cover` in
+          // that moment is a face cropped to its nose.
           <video
             ref={remoteVideo}
             autoPlay
             playsInline
             muted={speakerOff}
-            className="absolute inset-0 h-full w-full bg-panel object-cover"
+            className="absolute inset-0 h-full w-full bg-black object-contain"
           />
         ) : (
           <>

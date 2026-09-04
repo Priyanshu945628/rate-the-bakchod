@@ -36,7 +36,15 @@ import {
 import { ClockTime, DayLabel, TimeAgo, useRecent, utcDay } from "../time-ago";
 import { useDismiss } from "../use-dismiss";
 import { useRealtime } from "../realtime-provider";
+import { ViewableImage } from "../photo-viewer";
 import { Linkified } from "./linkify";
+import {
+  ORIGINAL,
+  PHOTO_FILTERS,
+  filterCss,
+  renderPhoto,
+  supportsFilters,
+} from "./photo-filters";
 
 /**
  * One open conversation.
@@ -439,6 +447,12 @@ function isReadByThem(message: ClientMessage, theirLastReadAt: string | null): b
  * both directions: the free space in a chat row is always toward the middle, and a
  * control pressed against the panel's edge is one you have to aim at.
  *
+ * The ⋯ is centred against the *bubble* rather than the row, which is why it lives
+ * inside the column next to the bubble instead of beside it as a third child of the
+ * `<li>`. The row is bubble plus timestamp, so centring on the row leaves the button
+ * hanging low — noticeably so against a photo, where the bubble is tall and the ⋯
+ * ended up level with the last line of chrome underneath it.
+ *
  * The `id` is on the `<li>`, not the bubble, because `jumpTo` scrolls to a whole row
  * and `chat-flash` is what then says which one it landed on.
  */
@@ -586,9 +600,7 @@ function Bubble({
       id={`msg-${message.id}`}
       className={`flex items-end gap-1.5 ${mine ? "justify-end" : "justify-start"}`}
     >
-      {mine ? (
-        menu
-      ) : runStart ? (
+      {mine ? null : runStart ? (
         <Avatar
           src={counterpart.avatarUrl}
           name={counterpart.displayName}
@@ -602,41 +614,50 @@ function Bubble({
 
       <div className="flex min-w-0 max-w-[min(78%,30rem)] flex-col gap-1">
         <div
-          className={`overflow-hidden rounded-card px-3 py-2 ${mine ? "chat-mine" : "chat-theirs"} ${
-            flash ? "chat-flash" : ""
-          }`}
+          className={`flex items-center gap-1.5 ${mine ? "justify-end" : "justify-start"}`}
         >
-          {message.replyTo ? (
-            <Quote reply={message.replyTo} mine={mine} onJump={onJump} />
-          ) : null}
+          {mine ? menu : null}
 
-          {imageUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={imageUrl}
-              alt=""
-              className={`max-h-[280px] w-auto rounded-ctl ${body || editing ? "mb-1.5" : ""}`}
-            />
-          ) : null}
+          <div
+            className={`min-w-0 overflow-hidden rounded-card px-3 py-2 ${
+              mine ? "chat-mine" : "chat-theirs"
+            } ${flash ? "chat-flash" : ""}`}
+          >
+            {message.replyTo ? (
+              <Quote reply={message.replyTo} mine={mine} onJump={onJump} />
+            ) : null}
 
-          {editing ? (
-            <EditBox
-              draft={draft}
-              busy={busy}
-              onChange={setDraft}
-              onCancel={() => {
-                setEditing(false);
-                setDraft(body ?? "");
-              }}
-              onSave={() => void save()}
-            />
-          ) : deleted ? (
-            <p className="text-[13px] italic text-faint">Unsent</p>
-          ) : body ? (
-            <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink">
-              <Linkified text={body} />
-            </p>
-          ) : null}
+            {imageUrl ? (
+              <ViewableImage
+                src={imageUrl}
+                alt=""
+                className={`max-h-[280px] w-auto rounded-ctl ${
+                  body || editing ? "mb-1.5" : ""
+                }`}
+              />
+            ) : null}
+
+            {editing ? (
+              <EditBox
+                draft={draft}
+                busy={busy}
+                onChange={setDraft}
+                onCancel={() => {
+                  setEditing(false);
+                  setDraft(body ?? "");
+                }}
+                onSave={() => void save()}
+              />
+            ) : deleted ? (
+              <p className="text-[13px] italic text-faint">Unsent</p>
+            ) : body ? (
+              <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink">
+                <Linkified text={body} />
+              </p>
+            ) : null}
+          </div>
+
+          {mine ? null : menu}
         </div>
 
         <div
@@ -655,8 +676,6 @@ function Bubble({
           ) : null}
         </div>
       </div>
-
-      {mine ? null : menu}
     </li>
   );
 }
@@ -765,6 +784,11 @@ function Quote({
  * The dot on the avatar and the line under the name are one fact drawn twice — a
  * glance and a read — and both come from `useRecent`, whose server snapshot is
  * `false`, so the two renders cannot disagree across hydration.
+ *
+ * No ring around the picture. A lit ring around a round avatar already means *there is
+ * a story in there* on the profile and in the feed's tray, and borrowing it here to
+ * mean nothing at all would cost it that meaning everywhere else. The whole block is a
+ * link to the profile and is shaded on hover to say so.
  */
 function Header({
   conversationId,
@@ -786,7 +810,7 @@ function Header({
     <header className="flex items-center gap-2 border-b border-line px-2.5 py-2">
       <Link
         href="/messages"
-        aria-label="Back"
+        aria-label="Back to conversations"
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-ctl text-muted transition-colors hover:bg-panel-2 hover:text-ink lg:hidden"
       >
         <ChevronLeftIcon className="h-4 w-4" />
@@ -794,13 +818,13 @@ function Header({
 
       <Link
         href={`/u/${encodeURIComponent(counterpart.handle)}`}
-        className="flex min-w-0 flex-1 items-center gap-2.5"
+        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-ctl px-1 py-0.5 transition-colors hover:bg-panel-2"
       >
-        <span className="relative shrink-0 rounded-pill p-[2px] ring-1 ring-chat/60">
+        <span className="relative shrink-0">
           <Avatar
             src={counterpart.avatarUrl}
             name={counterpart.displayName}
-            size={34}
+            size={36}
             isAI={counterpart.isAI}
           />
           {active ? (
@@ -833,7 +857,7 @@ function Header({
       </Link>
 
       {canCall ? (
-        <>
+        <span className="flex shrink-0 items-center gap-0.5">
           <CallButton
             conversationId={conversationId}
             kind="VOICE"
@@ -846,7 +870,7 @@ function Header({
             disabled={call !== null}
             onError={onError}
           />
-        </>
+        </span>
       ) : null}
     </header>
   );
@@ -976,6 +1000,10 @@ const EMOJI = [
  * The pill.
  *
  * `+` attaches an image, the smiley opens the tray above, and the blue circle sends.
+ * A picture can also be pasted straight in — a screenshot is the most common thing
+ * anybody has to hand, and reaching for a file dialog to send one is a step that only
+ * exists because nobody wired the paste up.
+ *
  * There is no microphone: DMs carry text and images, and a button that cannot record
  * is a promise the app does not keep.
  */
@@ -993,9 +1021,11 @@ function Composer({
   onSent: (message: ClientMessage) => void;
 }) {
   const [draft, setDraft] = useState("");
-  const [attachment, setAttachment] = useState<{ key: string; url: string } | null>(null);
+  /** The picked file and a local URL for it. Nothing is uploaded until Send. */
+  const [photo, setPhoto] = useState<{ file: File; url: string } | null>(null);
+  const [filter, setFilter] = useState(ORIGINAL);
+  const [filters, setFilters] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tray, setTray] = useState(false);
 
@@ -1011,12 +1041,22 @@ function Composer({
     useCallback(() => setTray(false), []),
   );
 
+  // One live URL at a time. The cleanup runs before the next photo's effect and on
+  // unmount, so the object URL of a photo that was replaced or sent is always released.
+  useEffect(() => {
+    const url = photo?.url;
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [photo?.url]);
+
   // Pressing Reply on a bubble should put the caret where the reply gets written.
   useEffect(() => {
     if (replyTo) box.current?.focus();
   }, [replyTo]);
 
-  const ready = (draft.trim().length > 0 || attachment !== null) && !busy && !uploading;
+  const css = filterCss(filter);
+  const ready = (draft.trim().length > 0 || photo !== null) && !busy;
 
   /** One ping per `TYPING_THROTTLE_MS`, however fast the keys come. */
   function ping() {
@@ -1029,45 +1069,60 @@ function Composer({
   }
 
   /**
-   * Take a file. Stored unattached and handed back a key, so the image is already
-   * uploaded by the time Send is pressed and the message goes out in one request.
+   * Take a picked or pasted file.
+   *
+   * Held here rather than uploaded on the spot, which is what the old flow did: the
+   * filter has to be settled before the pixels are drawn, and drawing them *is* the
+   * upload. So the size check is the only thing that happens now, and it happens
+   * against the raw file — the one number the user can do anything about.
    */
-  async function pick(chosen: File) {
+  function pick(chosen: File) {
+    if (!chosen.type.startsWith("image/")) {
+      setError("Images only.");
+      return;
+    }
     if (chosen.size > limits.dmImageUploadMaxBytes) {
       setError(`Images max ${Math.round(limits.dmImageUploadMaxBytes / (1024 * 1024))}MB.`);
       return;
     }
-    setUploading(true);
     setError(null);
-    try {
-      const form = new FormData();
-      form.append("file", chosen);
-      const res = await fetch("/api/message-asset", { method: "POST", body: form });
-      const data = (await res.json().catch(() => ({}))) as {
-        asset?: { key: string; url: string };
-        error?: string;
-      };
-      if (!res.ok || !data.asset) throw new Error(data.error ?? "Could not upload.");
-      setAttachment({ key: data.asset.key, url: data.asset.url });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not upload.");
-    } finally {
-      setUploading(false);
-    }
+    // Probed here rather than in an effect. This is the first moment a strip could be
+    // shown at all, and it is unambiguously a moment on the client — so the server
+    // render never has an opinion about it to disagree with.
+    setFilters(supportsFilters());
+    setFilter(ORIGINAL);
+    setPhoto({ file: chosen, url: URL.createObjectURL(chosen) });
   }
 
   async function send() {
     const text = draft.trim();
-    if (!text && !attachment) return;
+    if (!text && !photo) return;
     setBusy(true);
     setError(null);
     try {
+      let attachmentKey: string | null = null;
+      if (photo) {
+        const rendered = await renderPhoto(photo.file, css, {
+          maxEdge: limits.dmImageMaxEdge,
+          uploadMaxBytes: limits.dmImageUploadMaxBytes,
+        });
+        const form = new FormData();
+        form.append("file", rendered);
+        const res = await fetch("/api/message-asset", { method: "POST", body: form });
+        const data = (await res.json().catch(() => ({}))) as {
+          asset?: { key: string; url: string };
+          error?: string;
+        };
+        if (!res.ok || !data.asset) throw new Error(data.error ?? "Could not upload.");
+        attachmentKey = data.asset.key;
+      }
+
       const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           body: text || null,
-          attachmentKey: attachment?.key ?? null,
+          attachmentKey,
           replyToId: replyTo?.id ?? null,
         }),
       });
@@ -1078,7 +1133,8 @@ function Composer({
       if (!res.ok || !data.message) throw new Error(data.error ?? "Could not send.");
       onSent(data.message);
       setDraft("");
-      setAttachment(null);
+      setPhoto(null);
+      setFilter(ORIGINAL);
       setTray(false);
       pinged.current = 0;
       if (box.current) box.current.style.height = "auto";
@@ -1116,22 +1172,67 @@ function Composer({
         </div>
       ) : null}
 
-      {attachment ? (
-        <div className="relative mb-2 inline-block">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={attachment.url}
-            alt=""
-            className="max-h-[120px] rounded-ctl border border-line"
-          />
-          <button
-            type="button"
-            onClick={() => setAttachment(null)}
-            aria-label="Remove image"
-            className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-pill bg-bg/80 text-ink transition-colors hover:bg-bg"
-          >
-            <XIcon className="h-3.5 w-3.5" />
-          </button>
+      {photo ? (
+        <div className="mb-2 rounded-ctl border border-line bg-panel-2 p-2">
+          <div className="relative w-fit">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={photo.url}
+              alt=""
+              style={{ filter: css || undefined }}
+              className="max-h-[150px] rounded-ctl"
+            />
+            <button
+              type="button"
+              onClick={() => setPhoto(null)}
+              disabled={busy}
+              aria-label="Remove image"
+              className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-pill bg-bg/80 text-ink transition-colors hover:bg-bg"
+            >
+              <XIcon className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {/* Each swatch is the same object URL under a different filter — one decode,
+              eight looks, and no second copy of the photo to keep in step with it. */}
+          {filters ? (
+            <ul className="no-bar mt-2 flex gap-1.5 overflow-x-auto">
+              {PHOTO_FILTERS.map((preset) => {
+                const on = preset.id === filter;
+                return (
+                  <li key={preset.id} className="shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setFilter(preset.id)}
+                      // Locked once Send has started: the pixels were already drawn
+                      // through whichever filter was chosen then, and a strip that
+                      // could still move would be showing a photo nobody is sending.
+                      disabled={busy}
+                      aria-pressed={on}
+                      className={`flex w-[46px] flex-col items-center gap-1 rounded-ctl p-[3px] transition-colors ${
+                        on ? "bg-chat/15" : "hover:bg-panel-3"
+                      }`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photo.url}
+                        alt=""
+                        style={{ filter: preset.css || undefined }}
+                        className={`h-10 w-10 rounded-ctl border object-cover ${
+                          on ? "border-chat" : "border-line-strong"
+                        }`}
+                      />
+                      <span
+                        className={`text-[9px] leading-none ${on ? "text-chat" : "text-faint"}`}
+                      >
+                        {preset.label}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
         </div>
       ) : null}
 
@@ -1145,21 +1246,17 @@ function Composer({
             const chosen = e.target.files?.[0];
             // Cleared so picking the same file twice still fires a change.
             e.target.value = "";
-            if (chosen) void pick(chosen);
+            if (chosen) pick(chosen);
           }}
         />
         <button
           type="button"
           onClick={() => file.current?.click()}
-          disabled={uploading || attachment !== null}
+          disabled={busy}
           aria-label="Attach an image"
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-pill text-muted transition-colors hover:bg-panel-3 hover:text-ink disabled:opacity-40"
         >
-          {uploading ? (
-            <SpinnerIcon className="h-4 w-4 animate-spin" />
-          ) : (
-            <PlusIcon className="h-4 w-4" />
-          )}
+          <PlusIcon className="h-4 w-4" />
         </button>
 
         <div ref={trayWrap} className="relative shrink-0">
@@ -1210,6 +1307,18 @@ function Composer({
               e.preventDefault();
               if (ready) void send();
             }
+          }}
+          onPaste={(e) => {
+            // A copied photo arrives as a file beside no text at all. When there is
+            // text too, the paste is text: a spreadsheet cell and a chunk of a web page
+            // both bring a picture of themselves along, and nobody means to send that.
+            if (e.clipboardData.getData("text/plain")) return;
+            const image = Array.from(e.clipboardData.files).find((item) =>
+              item.type.startsWith("image/"),
+            );
+            if (!image) return;
+            e.preventDefault();
+            pick(image);
           }}
           className="focus-bare max-h-[120px] min-h-[32px] min-w-0 flex-1 resize-none bg-transparent px-1.5 py-1.5 text-[13.5px] leading-snug text-ink placeholder:text-faint"
         />

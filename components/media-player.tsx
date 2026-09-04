@@ -350,8 +350,9 @@ export function MediaPlayer({
         {...mediaProps}
         poster={poster ?? undefined}
         playsInline
-        // Tapping the picture is how everyone expects video to pause. Stories are
-        // the exception: there, a tap means next.
+        // Tapping the picture is how everyone expects a video to pause. A story does
+        // not wire it up here: the viewer lays its own hold surface across the whole
+        // frame, and two handlers for one press would cancel each other out.
         onClick={isStory ? undefined : toggle}
         // With a known ratio the frame is already the right shape and the video
         // fills it. Without one — a freshly picked file, before the server has

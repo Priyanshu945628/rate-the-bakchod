@@ -9,10 +9,12 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   EyeIcon,
+  PlayIcon,
   TrashIcon,
   XIcon,
 } from "./icons";
 import { MediaPlayer } from "./media-player";
+import { readSwipe } from "./swipe";
 
 /**
  * Full-screen story viewer: one person's run at a time, then straight on to the
@@ -23,6 +25,10 @@ import { MediaPlayer } from "./media-player";
  * that stutters. JS only fires once per story, to advance. `mark seen` is fired
  * once per story id per mount and never awaited, because whether the ring clears
  * is not worth making somebody wait for.
+ *
+ * The controls follow the pointer that is on the device. A tap anywhere on the frame
+ * holds the story and the next tap lets it run again; a swipe pages. With a mouse
+ * there is nothing to swipe with, so arrows sit at the edges of the frame instead.
  */
 
 /** How long a still frame holds. Videos and clips use their own duration. */
@@ -63,6 +69,10 @@ export function StoryViewer({
 
   const shellRef = useRef<HTMLDivElement>(null);
   const seenRef = useRef<Set<string>>(new Set());
+  /** Where a touch started, so where it ends can be read as a tap or a swipe. */
+  const touchRef = useRef<{ x: number; y: number } | null>(null);
+  /** Set by a swipe, so the click it may end in does not also hold the story. */
+  const swipedRef = useRef(false);
 
   const tray = trays[trayIndex];
   const run = tray?.stories ?? [];
@@ -150,12 +160,18 @@ export function StoryViewer({
       } else if (event.key === "Tab") {
         // Focus trap. The overlay covers the page, so tabbing out of it would put
         // the caret on a feed nobody can see.
-        const focusable = shellRef.current?.querySelectorAll<HTMLElement>(
-          "a[href], button:not([disabled])",
-        );
-        if (!focusable || focusable.length === 0) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
+        //
+        // Filtered by `offsetParent`, which is null for anything displayed away: the
+        // edge arrows are `hidden` below `md`, and handing focus to one of those is a
+        // Tab that appears to do nothing and a trap with no way round it.
+        const focusable = Array.from(
+          shellRef.current?.querySelectorAll<HTMLElement>(
+            "a[href], button:not([disabled])",
+          ) ?? [],
+        ).filter((el) => el.offsetParent !== null);
+        if (focusable.length === 0) return;
+        const first = focusable[0]!;
+        const last = focusable[focusable.length - 1]!;
         if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
           last.focus();
@@ -200,6 +216,38 @@ export function StoryViewer({
     } finally {
       setBusy(false);
     }
+  }
+
+  function onTouchStart(event: React.TouchEvent<HTMLDivElement>) {
+    // A second finger cancels the gesture instead of restarting it. A pinch lifts one
+    // finger at a time, and each of those would otherwise read as a stray drag.
+    const point = event.touches.length === 1 ? event.touches[0] : undefined;
+    touchRef.current = point ? { x: point.clientX, y: point.clientY } : null;
+    swipedRef.current = false;
+  }
+
+  function onTouchEnd(event: React.TouchEvent<HTMLDivElement>) {
+    const from = touchRef.current;
+    const point = event.changedTouches[0];
+    touchRef.current = null;
+    if (!from || !point) return;
+    const swipe = readSwipe(point.clientX - from.x, point.clientY - from.y);
+    if (!swipe) return;
+    swipedRef.current = true;
+    if (swipe === "next") advance();
+    else rewind();
+  }
+
+  /** Hold the story, or let it run on. */
+  function hold() {
+    // A swipe ends in a click on most touch browsers, and that click must not hold
+    // the story it just paged to. Cleared here as well as on the next touch, so a
+    // swipe that fires no click costs nothing.
+    if (swipedRef.current) {
+      swipedRef.current = false;
+      return;
+    }
+    setPaused((p) => !p);
   }
 
   const duration = story ? holdMs(story) : 0;
@@ -292,7 +340,11 @@ export function StoryViewer({
           </div>
         </header>
 
-        <div className="relative flex-1 overflow-hidden rounded-card bg-black">
+        <div
+          className="relative flex-1 overflow-hidden rounded-card bg-black"
+          onTouchStart={onTouchStart}
+          onTouchEnd={onTouchEnd}
+        >
           <StoryFrame
             story={story}
             paused={paused}
@@ -300,42 +352,58 @@ export function StoryViewer({
             onEnded={advance}
           />
 
-          {/* Tap zones. Buttons rather than divs so the whole thing works from a
-              keyboard as well, and labelled because they are otherwise invisible. */}
+          {/*
+            The whole frame is the hold button, so one press stops the picture, the
+            segment bar and the advance timer together. No z-index on it, deliberately:
+            the player's own play and speaker sit at `z-10`, so they stay above this and
+            keep taking their own presses instead of being swallowed by it.
+          */}
+          <button
+            type="button"
+            onClick={hold}
+            aria-label={paused ? "Resume story" : "Hold story"}
+            className="absolute inset-0 flex items-center justify-center"
+          >
+            {paused ? (
+              <span className="flex h-16 w-16 items-center justify-center rounded-pill bg-black/45 text-ink">
+                <PlayIcon className="h-7 w-7" />
+              </span>
+            ) : null}
+          </button>
+
+          {/* Arrows for a pointer that cannot swipe. On a phone the frame is 390px of
+              picture and every one of those pixels already means hold, so paging there
+              is the swipe instead. */}
           <button
             type="button"
             onClick={rewind}
             aria-label="Previous story"
-            className="absolute inset-y-0 left-0 flex w-1/4 items-center justify-start pl-1.5 text-ink/0 transition-colors hover:text-ink/70"
+            className="absolute left-1.5 top-1/2 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-pill bg-black/45 text-ink/70 transition-colors hover:bg-black/70 hover:text-ink md:flex"
           >
-            <ChevronLeftIcon className="h-6 w-6" />
+            <ChevronLeftIcon className="h-5 w-5" />
           </button>
           <button
             type="button"
             onClick={advance}
             aria-label="Next story"
-            className="absolute inset-y-0 right-0 flex w-1/4 items-center justify-end pr-1.5 text-ink/0 transition-colors hover:text-ink/70"
+            className="absolute right-1.5 top-1/2 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-pill bg-black/45 text-ink/70 transition-colors hover:bg-black/70 hover:text-ink md:flex"
           >
-            <ChevronRightIcon className="h-6 w-6" />
+            <ChevronRightIcon className="h-5 w-5" />
           </button>
 
           {story.caption && (
-            <p className="absolute inset-x-0 bottom-0 bg-black/70 px-4 py-3 text-center text-sm leading-relaxed break-words text-ink">
+            // `pointer-events-none` because the band sits over the hold surface and a
+            // captioned story must not have a strip along the bottom that ignores
+            // taps. No z-index either: the player's own controls are `z-10` and a
+            // caption that paints over the speaker button is a story you cannot
+            // unmute.
+            <p className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/70 px-4 py-3 text-center text-sm leading-relaxed break-words text-ink">
               {story.caption}
             </p>
           )}
         </div>
 
-        <div className="flex items-center gap-2 px-0.5 py-2">
-          <button
-            type="button"
-            onClick={() => setPaused((p) => !p)}
-            className="h-8 rounded-pill bg-panel px-3 text-[11px] font-medium text-muted transition-colors hover:text-ink"
-          >
-            {paused ? "Resume" : "Hold"}
-          </button>
-          {error && <p className="text-xs text-danger">{error}</p>}
-        </div>
+        {error && <p className="px-0.5 py-2 text-xs text-danger">{error}</p>}
       </div>
     </div>
   );
@@ -406,6 +474,10 @@ function StoryFrame({
           paused={paused}
           onPausedChange={onPausedChange}
           onEnded={onEnded}
+          // Lifted over the viewer's hold surface, which is a later sibling of this
+          // whole frame and would otherwise take the presses meant for play and mute.
+          // A video story's cluster is already `z-10` for the same reason.
+          className="z-10"
         />
       </div>
     );
