@@ -16,6 +16,7 @@ import { KeyboardInset } from "../keyboard-inset";
 import { FlipCameraIcon, SpinnerIcon, XIcon } from "../icons";
 import { fit, renderFrame } from "../photo-filters";
 import { LensCarousel } from "./lens-carousel";
+import { LensStage } from "./lens-stage";
 
 /**
  * The camera: the whole screen, a live preview, and one shot on its way out of it.
@@ -31,12 +32,11 @@ import { LensCarousel } from "./lens-carousel";
  *     gets sent is what was on screen. A still keeps its unfiltered frame and can be
  *     re-graded freely; a clip is drawn through the filter as it records, because a
  *     recorded video cannot be re-graded on the way out.
- *   - a **face** lens is drawn by the server. It cannot be live — OpenCV finding a face
- *     thirty times a second is not something a web dyno does — so the swatch shows the
- *     art, and the effect lands when the shutter fires. After that it is one request per
- *     lens tapped, and the unfiltered frame is still what gets sent up, so swapping horse
- *     for uncle in review costs a round trip and nothing else. Stills only, for the same
- *     reason: a sixty-second clip is eighteen hundred detections.
+ *   - a **face** lens is drawn twice. `lens-stage.tsx` draws it live on a canvas over the
+ *     preview, tracking the head off a detection the server sends back a couple of times a
+ *     second; then the shutter posts the raw frame and the server draws the version that
+ *     actually gets sent. The bytes stay the server's to make — the preview is for aiming.
+ *     Stills only: a sixty-second clip is eighteen hundred detections.
  *
  * Portalled to `document.body`. Both buttons that open it sit inside `glass-bar`
  * elements, and `backdrop-filter` makes an ancestor a containing block for fixed
@@ -297,7 +297,8 @@ export function CameraSheet({
    * watching the selection, which would be a setState in an effect and is also a worse
    * description of what happened: a person tapped a thing.
    *
-   * Turning it in the live view never renders anything. There is nothing to render yet.
+   * In the live view there is nothing to send yet: `lens-stage.tsx` picks the change up from
+   * the selection and draws it on the preview until the shutter fires.
    */
   async function choose(id: string) {
     setLens(id);
@@ -594,6 +595,12 @@ export function CameraSheet({
             style={{ filter: css || undefined, transform: mirrored ? "scaleX(-1)" : undefined }}
             className="h-full w-full object-contain"
           />
+
+          {/* The live face lens, drawn over the preview. Mounted only while one is selected,
+              so an ordinary viewfinder is still just a `<video>` with nothing on top of it. */}
+          {shot === null && isFaceLens(lens) && ready ? (
+            <LensStage video={preview} lens={lens} mirrored={mirrored} tone={filters} />
+          ) : null}
 
           {shot?.kind === "IMAGE" ? (
             // eslint-disable-next-line @next/next/no-img-element

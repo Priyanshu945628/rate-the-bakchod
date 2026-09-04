@@ -215,6 +215,16 @@ export const rateLimits = {
    * is the most CPU any request here asks for.
    */
   lens: { max: 120, windowSec: 3600 },
+  /**
+   * Tracking the face for the live viewfinder. Detection only — no compositing, no art,
+   * and a 384px frame — so it is a fraction of the cost of `lens`, and it needs a budget
+   * two orders of magnitude wider: a camera left open asks about 90 times a minute.
+   *
+   * The number is roughly ten minutes of continuous viewfinder per hour, which no real
+   * session reaches. Past it, tracking stops and the art stays where it last landed —
+   * quietly, because nobody needs to be told about a quota mid-selfie.
+   */
+  lensTrack: { max: 900, windowSec: 3600 },
 } as const;
 
 export type RateLimitBucket = keyof typeof rateLimits;

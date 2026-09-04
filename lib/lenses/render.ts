@@ -16,14 +16,13 @@ import { limits } from "../config";
 import { MediaError } from "../media/pipeline";
 import { DETECT_EDGE, detectFaces } from "./detect";
 import {
-  anchorPoint,
   assumedFace,
   faceFrame,
   largestFace,
   scaleDetection,
-  shift,
   type FaceFrame,
 } from "./geometry";
+import { frameOrigin, layerCentre, layerSize, turns } from "./layout";
 import { RECIPES, type LensLayer, type LensTone } from "./recipes";
 
 export interface RenderedLens {
@@ -34,12 +33,6 @@ export interface RenderedLens {
   /** False when no face was found and the lens landed on an assumed one. */
   faceFound: boolean;
 }
-
-/** How far a corner sticker sits in, as a fraction of the shorter edge. */
-const CORNER_INSET = 0.06;
-
-/** Rotating art by less than this is a resample that changes nothing. */
-const ROLL_DEADZONE = 2;
 
 /** RGBA art, ready to place. */
 interface Raster {
@@ -195,16 +188,19 @@ async function placeLayer(
   height: number,
 ): Promise<OverlayOptions | null> {
   const art = await loadArt(layer.art);
-  const size = targetSize(layer, art, frame, width, height);
+  const size = layerSize(layer, art, frame, width, height);
   if (size.width < 2 || size.height < 2) return null;
 
   let raster = await rasterize(art, size.width, size.height);
   if (layer.opacity !== undefined && layer.opacity < 1) raster = fade(raster, layer.opacity);
-  if (!layer.fixed && Math.abs(frame.roll) > ROLL_DEADZONE) {
-    raster = await turn(raster, frame.roll);
-  }
+  if (turns(layer, frame)) raster = await turn(raster, frame.roll);
 
-  const origin = layerOrigin(layer, frame, raster, width, height);
+  // Rotation grows the canvas around the centre, so the top-left has to be worked out from
+  // the size the art ended up, not the size it was asked for.
+  const origin =
+    layer.anchor === "frame"
+      ? frameOrigin(layer, raster, width, height)
+      : centreOn(layerCentre(layer, frame), raster);
   const clipped = await clipToFrame(raster, origin, width, height);
   if (!clipped) return null;
 
@@ -217,45 +213,8 @@ async function placeLayer(
   };
 }
 
-/** Layer size in pixels: eye spans for facial art, a fraction of the frame otherwise. */
-function targetSize(
-  layer: LensLayer,
-  art: Art,
-  frame: FaceFrame,
-  width: number,
-  height: number,
-): { width: number; height: number } {
-  if (layer.anchor === "frame") {
-    // A full-frame overlay is stretched to fit exactly. Bokeh and sparkle scatter have no
-    // shape to distort, and letterboxing them would leave a visible edge.
-    if (layer.width >= 1 && !layer.corner) return { width, height };
-    const w = Math.round(layer.width * width);
-    return { width: w, height: Math.round((w * art.height) / art.width) };
-  }
-  const w = Math.round(layer.width * frame.eyeSpan);
-  return { width: w, height: Math.round((w * art.height) / art.width) };
-}
-
-/** Top-left corner the layer is composited at, which may be off-canvas. */
-function layerOrigin(
-  layer: LensLayer,
-  frame: FaceFrame,
-  raster: Raster,
-  width: number,
-  height: number,
-): { left: number; top: number } {
-  if (layer.anchor === "frame") {
-    const inset = Math.round(Math.min(width, height) * CORNER_INSET);
-    const right = width - raster.width - inset;
-    const bottom = height - raster.height - inset;
-    if (layer.corner === "tl") return { left: inset, top: inset };
-    if (layer.corner === "tr") return { left: right, top: inset };
-    if (layer.corner === "bl") return { left: inset, top: bottom };
-    if (layer.corner === "br") return { left: right, top: bottom };
-    return { left: 0, top: 0 };
-  }
-  const base = anchorPoint(frame, layer.anchor);
-  const point = layer.dx || layer.dy ? shift(frame, base, layer.dx ?? 0, layer.dy ?? 0) : base;
+/** Top-left that puts a raster's middle on a point. */
+function centreOn(point: { x: number; y: number }, raster: Raster) {
   return {
     left: Math.round(point.x - raster.width / 2),
     top: Math.round(point.y - raster.height / 2),

@@ -1,18 +1,24 @@
 /**
- * Face detection, in a child process.
+ * Face detection, in a child process that stays alive.
  *
- * Reads a raw 8-bit greyscale buffer, prints what it found as JSON, exits.
+ * Reads framed requests on stdin and writes one JSON line per reply:
  *
- *   node scripts/detect-face.mjs <path-to-raw-grey> <width> <height>
- *   {"faces":[{"x":67,"y":190,"width":188,"height":188,"eyes":[{"cx":129,"cy":86}]}]}
+ *   → {"id":7,"width":384,"height":512}\n  followed by width*height raw grey bytes
+ *   ← {"id":7,"faces":[{"x":67,"y":190,"width":188,"height":188,"eyes":[…]}]}\n
+ *
+ * A header line and then the bytes, rather than JSON all the way, because a raw greyscale
+ * frame contains every byte value including newlines — there is nothing in it to delimit.
  *
  * Out of process on purpose. Haar detection is synchronous and CPU-bound: a few hundred
- * milliseconds inside the web process would stall every other request, including the
- * event streams the chat holds open. Here it stalls nothing, a hung run can be killed,
- * and the 10MB WASM heap goes back to the operating system when this exits.
+ * milliseconds inside the web process would stall every other request, including the event
+ * streams the chat holds open. Here it stalls nothing and a wedged run can be killed.
  *
- * Greyscale in, because that is all the classifier looks at — decoding and resizing
- * belong to sharp in the parent, which is already holding the image.
+ * Long-lived on purpose too. Starting the WASM runtime costs ~350ms against ~70ms of
+ * actual work, so a process per frame would spend five sixths of its life booting — and
+ * the live viewfinder asks for a frame every 650ms.
+ *
+ * Greyscale in, because that is all the classifier looks at — decoding and resizing belong
+ * to sharp in the parent, which is already holding the image.
  */
 
 import { readFileSync } from "node:fs";
@@ -42,19 +48,19 @@ const MIN_EYE = 0.14;
 /** Eyes live in the top of the box; below this is nose and mouth, and false positives. */
 const EYE_BAND = 0.62;
 
-function fail(message) {
-  process.stdout.write(JSON.stringify({ faces: [], error: message }));
+/** Nothing but replies goes to stdout — a stray line would corrupt the stream. */
+function reply(payload) {
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+function die(message) {
+  reply({ error: message });
   process.exit(0);
 }
 
-const [, , rawPath, widthArg, heightArg] = process.argv;
-const width = Number(widthArg);
-const height = Number(heightArg);
-if (!rawPath || !Number.isInteger(width) || !Number.isInteger(height)) {
-  fail("usage: detect-face.mjs <raw-grey> <width> <height>");
-}
-
-const module_ = await import("@techstark/opencv-js");
+const module_ = await import("@techstark/opencv-js").catch((err) =>
+  die(`could not load opencv: ${err instanceof Error ? err.message : String(err)}`),
+);
 const cvModule = module_.default ?? module_;
 
 /**
@@ -78,45 +84,48 @@ function loadCascade(file) {
   return classifier;
 }
 
-let grey;
 let faceCascade;
 let eyeCascade;
 try {
-  const bytes = readFileSync(rawPath);
-  if (bytes.length < width * height) fail("raw buffer is smaller than its dimensions");
-
+  // Read once, for the life of the process. This is the whole reason it has one.
   faceCascade = loadCascade("haarcascade_frontalface_alt2.xml");
   eyeCascade = loadCascade("haarcascade_eye.xml");
-
-  grey = cv.matFromArray(height, width, cv.CV_8UC1, bytes.subarray(0, width * height));
-  // Flattens out under- and over-exposure, which is most of what a phone selfie in bad
-  // light suffers from, and is the single change that most improves the hit rate.
-  cv.equalizeHist(grey, grey);
-
-  const min = Math.max(24, Math.round(Math.min(width, height) * MIN_FACE));
-
-  // Strict first. A second pass only where the first found nothing: a beard, heavy
-  // glasses or a head turned slightly all lose the strict pass, and a marginal detection
-  // beats the centred guess the caller falls back to. It relaxes how carefully the window
-  // is stepped and how many neighbours must agree — never the minimum size, because a
-  // smaller window is how the loose pass would start reporting eyebrows as faces.
-  let faces = detectFaces(faceCascade, grey, min, 1.1, 4);
-  if (faces.length === 0) faces = detectFaces(faceCascade, grey, min, 1.05, 2);
-
-  const withEyes = faces.map((face) => ({ ...face, eyes: detectEyes(eyeCascade, grey, face) }));
-  process.stdout.write(JSON.stringify({ faces: withEyes }));
 } catch (err) {
-  process.stdout.write(
-    JSON.stringify({ faces: [], error: err instanceof Error ? err.message : String(err) }),
-  );
-} finally {
-  grey?.delete();
-  faceCascade?.delete();
-  eyeCascade?.delete();
+  die(err instanceof Error ? err.message : String(err));
 }
 
-// Emscripten leaves handles open, so a finished script does not exit on its own.
-process.exit(0);
+reply({ ready: true });
+
+/**
+ * One frame.
+ *
+ * Every Mat and vector is deleted on the way out: the WASM heap is not garbage collected,
+ * and a leak here would grow for as long as somebody keeps the camera open.
+ */
+function detect(bytes, width, height) {
+  let grey;
+  try {
+    grey = cv.matFromArray(height, width, cv.CV_8UC1, bytes);
+    // Flattens out under- and over-exposure, which is most of what a phone selfie in bad
+    // light suffers from, and is the single change that most improves the hit rate.
+    cv.equalizeHist(grey, grey);
+
+    const min = Math.max(24, Math.round(Math.min(width, height) * MIN_FACE));
+
+    // Strict first. A second pass only where the first found nothing: a beard, heavy
+    // glasses or a head turned slightly all lose the strict pass, and a marginal detection
+    // beats the centred guess the caller falls back to. It relaxes how carefully the
+    // window is stepped and how many neighbours must agree — never the minimum size,
+    // because a smaller window is how the loose pass would start reporting eyebrows as
+    // faces.
+    let faces = detectFaces(faceCascade, grey, min, 1.1, 4);
+    if (faces.length === 0) faces = detectFaces(faceCascade, grey, min, 1.05, 2);
+
+    return faces.map((face) => ({ ...face, eyes: detectEyes(eyeCascade, grey, face) }));
+  } finally {
+    grey?.delete();
+  }
+}
 
 function detectFaces(cascade, mat, min, scaleFactor, neighbours) {
   const found = new cv.RectVector();
@@ -164,3 +173,57 @@ function detectEyes(cascade, mat, face) {
     roi?.delete();
   }
 }
+
+/**
+ * The request loop.
+ *
+ * stdin arrives in whatever sized chunks the pipe felt like, so nothing can be assumed to
+ * be whole: a header may land split across two chunks, and two requests may land in one.
+ * Everything is buffered and consumed only once complete.
+ */
+let inbox = Buffer.alloc(0);
+let head = null;
+
+process.stdin.on("data", (chunk) => {
+  inbox = inbox.length === 0 ? chunk : Buffer.concat([inbox, chunk]);
+  for (;;) {
+    if (!head) {
+      const cut = inbox.indexOf(0x0a);
+      if (cut === -1) return;
+      const line = inbox.subarray(0, cut).toString("utf8");
+      inbox = inbox.subarray(cut + 1);
+      try {
+        head = JSON.parse(line);
+      } catch {
+        die(`unreadable request header: ${line.slice(0, 80)}`);
+      }
+    }
+
+    const need = head.width * head.height;
+    if (!Number.isInteger(need) || need <= 0) die("request header has no usable size");
+    if (inbox.length < need) return;
+
+    const bytes = inbox.subarray(0, need);
+    inbox = inbox.subarray(need);
+    const request = head;
+    head = null;
+
+    try {
+      reply({ id: request.id, faces: detect(bytes, request.width, request.height) });
+    } catch (err) {
+      reply({
+        id: request.id,
+        faces: [],
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+});
+
+// The parent closing the pipe is the shutdown signal. Emscripten leaves handles open, so
+// nothing here would exit on its own.
+process.stdin.on("end", () => {
+  faceCascade?.delete();
+  eyeCascade?.delete();
+  process.exit(0);
+});
