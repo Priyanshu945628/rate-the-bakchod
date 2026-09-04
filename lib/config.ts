@@ -4,9 +4,20 @@
  * optional key degrades gracefully instead of crashing the whole app.
  */
 
+/**
+ * A variable that has to be set and is not.
+ *
+ * Named so `errorTag` can say "ConfigError" in a 500 rather than nothing at all. The
+ * message names the variable, which is fine in a log and not fine in a response — so
+ * the class name is the part that travels.
+ */
+export class ConfigError extends Error {
+  override name = "ConfigError";
+}
+
 function required(name: string): string {
   const v = process.env[name];
-  if (!v) throw new Error(`Missing required environment variable: ${name}`);
+  if (!v) throw new ConfigError(`Missing required environment variable: ${name}`);
   return v;
 }
 
@@ -67,6 +78,20 @@ export const serverEnv = {
   /** Anthropic key is genuinely optional — the bot falls back to canned lines. */
   get anthropicKey() {
     return optional("ANTHROPIC_API_KEY");
+  },
+
+  /**
+   * Where the SDK sends its requests. Unset means api.anthropic.com.
+   *
+   * Declared here even though the SDK reads the same variable by itself, because a
+   * knob that only exists inside a dependency's constructor default is a knob nobody
+   * finds — every other setting in this app is a line in this file.
+   *
+   * The origin only. The SDK appends `/v1/messages`, so a gateway URL pasted in with
+   * its own `/v1` on the end asks for `/v1/v1/messages`.
+   */
+  get anthropicBaseUrl() {
+    return optional("ANTHROPIC_BASE_URL");
   },
   get bakchodModel() {
     // Default per Anthropic guidance. Set BAKCHOD_MODEL=claude-haiku-4-5 for

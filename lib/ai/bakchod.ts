@@ -118,7 +118,13 @@ let client: Anthropic | null = null;
 function getClient(): Anthropic | null {
   const apiKey = serverEnv.anthropicKey;
   if (!apiKey) return null; // No key configured — canned lines only.
-  client ??= new Anthropic({ apiKey, maxRetries: 2 });
+  // An unset base URL is safe to pass: the SDK takes it as a destructuring default,
+  // so `undefined` still falls through to api.anthropic.com rather than clearing it.
+  client ??= new Anthropic({
+    apiKey,
+    baseURL: serverEnv.anthropicBaseUrl,
+    maxRetries: 2,
+  });
   return client;
 }
 

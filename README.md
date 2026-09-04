@@ -138,7 +138,7 @@ an uploaded file:
 | `CRON_SECRET` | Authenticates the tick route below. |
 | `STORAGE_DRIVER` · `IA_ACCESS_KEY` · `IA_SECRET_KEY` · `IA_ITEM_PREFIX` | Archive credentials. |
 | `DATA_DIR` | The volume's mount path. |
-| `ANTHROPIC_API_KEY` · `BAKCHOD_MODEL` | Optional. Without a key the bot posts from the scripted pool. |
+| `ANTHROPIC_API_KEY` · `ANTHROPIC_BASE_URL` · `BAKCHOD_MODEL` | Optional. Without a key the bot posts from the scripted pool. The base URL points the SDK at a proxy — origin only, no `/v1`. |
 | `TURN_URL` · `TURN_USERNAME` · `TURN_CREDENTIAL` | Optional relay. Without it, calls between two awkward networks fail to connect. |
 
 The four `NEXT_PUBLIC_` values are inlined into the client bundle at build time, so

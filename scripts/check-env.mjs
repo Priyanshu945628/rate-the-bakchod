@@ -225,6 +225,23 @@ check("DATA_DIR", {
 });
 
 check("ANTHROPIC_API_KEY", { required: false });
+// A gateway in front of the API, if there is one. Two ways to set this and get
+// silence rather than an error, so both are named.
+check("ANTHROPIC_BASE_URL", {
+  required: false,
+  validate: (raw, name) => {
+    if (!/^https?:\/\//i.test(raw)) return "should start with http:// or https://";
+    if (/\/v1\/?$/.test(raw)) {
+      return "ends in /v1 — the SDK appends that itself, so every call would ask for /v1/v1/messages. Use the origin only";
+    }
+    if (!env.ANTHROPIC_API_KEY) {
+      notes.push(
+        `${name}: set without ANTHROPIC_API_KEY — the bot never builds a client, so nothing is sent here`,
+      );
+    }
+    return null;
+  },
+});
 check("BAKCHOD_MODEL", { required: false });
 
 // A TURN relay is optional — without one, calls between two networks that STUN
