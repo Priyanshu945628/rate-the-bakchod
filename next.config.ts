@@ -24,6 +24,27 @@ const nextConfig: NextConfig = {
       "node_modules/@techstark/opencv-js/**/*",
     ],
   },
+
+  experimental: {
+    /**
+     * Room for a real upload to survive the proxy.
+     *
+     * Because `proxy.ts` exists and matches `/api/posts`, Next clones every request
+     * body so the proxy and the route handler can each read it. The clone is capped,
+     * and the default cap is 10MB — but a body over it is not refused. The clone is
+     * cut off at the limit and EOF is pushed into it (`server/body-streams.js`), so
+     * the handler is handed a multipart body that stops mid-part and
+     * `request.formData()` throws a bare `TypeError`. That is how an 11MB video came
+     * back as "Something broke on our side. (TypeError)" from a composer advertising
+     * 100MB.
+     *
+     * Keep this above `limits.maxUploadBytes` in `lib/config.ts` plus multipart
+     * framing. The cost is memory rather than disk: the clone is buffered, so a
+     * full-size upload holds its own copy here on top of the ones the handler makes
+     * while decoding it.
+     */
+    proxyClientMaxBodySize: "104mb",
+  },
 };
 
 export default nextConfig;

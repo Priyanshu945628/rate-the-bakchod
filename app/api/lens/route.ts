@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authorizeWrite, handleRouteError, jsonError } from "@/lib/api";
+import { authorizeWrite, handleRouteError, jsonError, readMultipart } from "@/lib/api";
 import { limits } from "@/lib/config";
 import { isFaceLens } from "@/lib/lenses/catalog";
 import { renderLens } from "@/lib/lenses/render";
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   if ("response" in auth) return auth.response;
 
   try {
-    const form = await request.formData();
+    const form = await readMultipart(request);
     const file = form.get("file");
     const lens = form.get("lens");
 

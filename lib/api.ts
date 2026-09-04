@@ -74,3 +74,20 @@ export async function readJsonBody(request: Request): Promise<unknown> {
     throw new PostServiceError("Expected a JSON body.", 400);
   }
 }
+
+/**
+ * Parse a multipart body, turning an unreadable one into a 400 rather than a 500.
+ *
+ * `request.formData()` throws a bare `TypeError` when the body will not parse, and the
+ * likeliest cause is not a broken client: a body over
+ * `experimental.proxyClientMaxBodySize` reaches the handler truncated rather than
+ * refused, so the last part ends mid-stream. Either way the request is what is wrong,
+ * so it should not read as a bug on our side.
+ */
+export async function readMultipart(request: Request): Promise<FormData> {
+  try {
+    return await request.formData();
+  } catch {
+    throw new PostServiceError("That upload did not arrive in one piece. Try again.", 400);
+  }
+}

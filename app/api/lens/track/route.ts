@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import sharp from "sharp";
-import { authorizeWrite, handleRouteError, jsonError } from "@/lib/api";
+import { authorizeWrite, handleRouteError, jsonError, readMultipart } from "@/lib/api";
 import { TRACK_EDGE, detectFaces } from "@/lib/lenses/detect";
 import { largestFace } from "@/lib/lenses/geometry";
 import { isHeic, sniffKind } from "@/lib/media/pipeline";
@@ -32,7 +32,7 @@ export async function POST(request: Request) {
   if ("response" in auth) return auth.response;
 
   try {
-    const form = await request.formData();
+    const form = await readMultipart(request);
     const file = form.get("file");
     if (!(file instanceof File) || file.size === 0) return jsonError("No frame.", 400);
     if (file.size > MAX_BYTES) return jsonError("Frame is too big.", 413);

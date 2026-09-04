@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authorizeWrite, handleRouteError, jsonError, readJsonBody } from "@/lib/api";
+import { authorizeWrite, handleRouteError, jsonError, readJsonBody, readMultipart } from "@/lib/api";
 import { limits } from "@/lib/config";
 import { clearProfileAsset, putProfileAsset } from "@/lib/profile";
 import type { ProfileAssetSlot } from "@prisma/client";
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   if ("response" in auth) return auth.response;
 
   try {
-    const form = await request.formData();
+    const form = await readMultipart(request);
     const slot = parseSlot(form.get("slot"));
     if (!slot) return jsonError("Which slot? banner, logo or cover.", 400);
 

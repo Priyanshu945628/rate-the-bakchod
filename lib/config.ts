@@ -120,7 +120,15 @@ export const serverEnv = {
 
 /** Media limits. Kept together so they are easy to tune in one place. */
 export const limits = {
-  maxUploadBytes: 100 * 1024 * 1024, // 100 MB accepted at the door
+  /**
+   * 100 MB accepted at the door.
+   *
+   * `experimental.proxyClientMaxBodySize` in `next.config.ts` has to stay above this.
+   * Next buffers a clone of every proxied request body, and a body over that cap is
+   * truncated rather than refused — so a limit raised here and not there turns into an
+   * unreadable multipart body instead of the 413 this number promises.
+   */
+  maxUploadBytes: 100 * 1024 * 1024,
   maxVideoDurationMs: 60_000,
   maxAudioDurationMs: 300_000,
   maxImageEdge: 1600, // px, longest side after normalisation

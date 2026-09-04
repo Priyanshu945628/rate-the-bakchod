@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { authorizeWrite, handleRouteError, jsonError } from "@/lib/api";
+import { authorizeWrite, handleRouteError, jsonError, readMultipart } from "@/lib/api";
 import { limits } from "@/lib/config";
 import { createPost, fetchFeed, parseFeedTab, toClientPost } from "@/lib/posts";
 import { fetchPrivacy, visibilityAllows } from "@/lib/profile";
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
   if ("response" in auth) return auth.response;
 
   try {
-    const form = await request.formData();
+    const form = await readMultipart(request);
     const caption = form.get("caption");
     const tweetText = form.get("tweetText");
     const file = form.get("file");

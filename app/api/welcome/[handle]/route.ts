@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { handleRouteError, jsonError, readJsonBody } from "@/lib/api";
+import { handleRouteError, jsonError, readJsonBody, readMultipart } from "@/lib/api";
 import { publicEnv } from "@/lib/config";
 import { fetchWelcomeHtml, visibilityAllows } from "@/lib/profile";
 import { WelcomePreviewSchema } from "@/lib/profile-schema";
@@ -114,7 +114,7 @@ export async function POST(
 async function readPreviewInput(request: Request): Promise<unknown> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("form")) {
-    const form = await request.formData();
+    const form = await readMultipart(request);
     const accent = form.get("accent");
     return {
       html: String(form.get("html") ?? ""),
