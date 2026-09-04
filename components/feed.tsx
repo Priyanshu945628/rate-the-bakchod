@@ -128,7 +128,14 @@ export function Feed({
         </div>
       ) : (
         posts.map((post) => (
-          <PostCard key={post.id} post={post} viewer={viewer} />
+          <PostCard
+            key={post.id}
+            post={post}
+            viewer={viewer}
+            // An author deleting their own leaves nothing to render, and no
+            // tombstone either — so the card goes rather than turning into one.
+            onRemoved={() => setPosts((prev) => prev.filter((p) => p.id !== post.id))}
+          />
         ))
       )}
 

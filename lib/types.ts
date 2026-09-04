@@ -302,6 +302,28 @@ export interface ClientCounterpart {
 }
 
 /**
+ * The line quoted above a reply.
+ *
+ * Just enough of the original to recognise it, resolved on the server so the
+ * client never has to have the quoted message still in memory — a reply to
+ * something forty messages back is the normal case, and that message may be
+ * pages above the window.
+ *
+ * `senderId` rather than a name: whose message it was is answered by comparing
+ * against the viewer, and this ref travels on the realtime stream to *both* ends
+ * of the thread, where a baked-in "You" would be wrong for one of them.
+ */
+export interface ClientReplyRef {
+  id: string;
+  senderId: string;
+  /** One line of the quoted body. Null for an image-only or deleted original. */
+  excerpt: string | null;
+  hasImage: boolean;
+  /** The quoted message has since been unsent. Quote it as gone, not as text. */
+  deleted: boolean;
+}
+
+/**
  * One message.
  *
  * A deleted message keeps its row and its place in the thread — `deleted` is
@@ -314,10 +336,14 @@ export interface ClientMessage {
   body: string | null;
   imageUrl: string | null;
   createdAt: string;
+  /** When the sender last rewrote it, or null if these are the original words. */
+  editedAt: string | null;
   deleted: boolean;
   /** Whether the signed-in viewer wrote it — the side of the thread it sits on. */
   mine: boolean;
   senderId: string;
+  /** What it answers, or null for a message that starts its own point. */
+  replyTo: ClientReplyRef | null;
 }
 
 /**
@@ -442,8 +468,29 @@ export type RealtimeEvent =
         body: string | null;
         imageUrl: string | null;
         createdAt: string;
+        replyTo: ClientReplyRef | null;
         author: { id: string; handle: string; displayName: string };
       };
+    }
+  | {
+      /**
+       * One message changed after the fact — rewritten, or unsent.
+       *
+       * Deliberately not a whole `ClientMessage`: `mine` is answered from whoever
+       * is reading and this payload goes to both ends unchanged. The thread patches
+       * the entry it already has, which is the only place the message exists.
+       *
+       * `body` is null on an unsend, and so is the image — the strip happens here
+       * rather than in the client, for the same reason it happens in
+       * `toClientMessage`. A tombstone that arrives carrying the original text has
+       * not deleted anything.
+       */
+      type: "message-update";
+      conversationId: string;
+      messageId: string;
+      body: string | null;
+      editedAt: string | null;
+      deleted: boolean;
     }
   | { type: "read"; conversationId: string; by: string; at: string }
   | { type: "typing"; conversationId: string; by: string }
@@ -481,6 +528,7 @@ export type RealtimeEvent =
 export const REALTIME_EVENT_NAMES = [
   "notification",
   "message",
+  "message-update",
   "read",
   "typing",
   "unread",

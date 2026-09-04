@@ -131,3 +131,44 @@ export function ClockTime({ iso, className }: { iso: string; className?: string 
     </time>
   );
 }
+
+const dayFull = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+/** The UTC calendar day an ISO stamp falls on. `2026-09-03`, and nothing else. */
+export function utcDay(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function dayName(iso: string): string {
+  const key = utcDay(iso);
+  const now = Date.now();
+  if (key === new Date(now).toISOString().slice(0, 10)) return "Today";
+  if (key === new Date(now - DAY).toISOString().slice(0, 10)) return "Yesterday";
+  return dayFull.format(new Date(iso));
+}
+
+/**
+ * The divider between two days of a conversation.
+ *
+ * This one *does* read the clock on both sides of hydration, unlike `TimeAgo` above,
+ * and that is safe for the reason `TimeAgo` is not: the label only changes at
+ * midnight UTC, so the server's "now" and the browser's have to straddle that one
+ * instant to disagree. In exchange it borrows the shared tick, which is what makes
+ * "Today" become "Yesterday" in a thread left open overnight instead of lying until
+ * a reload.
+ */
+export function DayLabel({ iso, className }: { iso: string; className?: string }) {
+  const snapshot = useCallback(() => dayName(iso), [iso]);
+  const label = useSyncExternalStore(subscribe, snapshot, snapshot);
+
+  return (
+    <time dateTime={utcDay(iso)} className={className}>
+      {label}
+    </time>
+  );
+}

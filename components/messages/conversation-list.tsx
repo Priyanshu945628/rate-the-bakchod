@@ -54,6 +54,14 @@ export function ConversationList({
   useRealtime(
     useCallback(
       (event) => {
+        // An edit or an unsend can change a row's preview, but the event does not say
+        // whether the message it patches is that row's *newest* one, and the newest is
+        // all this list shows. Asking the server again is cheaper than keeping every
+        // message of every thread in here just to answer that question.
+        if (event.type === "message-update") {
+          void refetch();
+          return;
+        }
         if (event.type !== "message") return;
 
         setRows((prev) => {
@@ -275,7 +283,7 @@ function Row({
             {row.preview}
           </span>
           {unread ? (
-            <span aria-label="Unread" className="h-2 w-2 shrink-0 rounded-full bg-accent" />
+            <span aria-label="Unread" className="h-2 w-2 shrink-0 rounded-full bg-chat" />
           ) : null}
         </span>
       </span>

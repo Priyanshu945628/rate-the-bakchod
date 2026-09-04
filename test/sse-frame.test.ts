@@ -48,6 +48,7 @@ describe("sseFrame", () => {
         body: "line one\nline two\n\nline three",
         imageUrl: null,
         createdAt: "2026-09-02T10:00:00.000Z",
+        replyTo: null,
         author: { id: "u1", handle: "priya", displayName: "Priya" },
       },
     };

@@ -281,10 +281,27 @@ model Message {
   body          String? @db.VarChar(4000)
   attachmentKey String? @unique
 
-  createdAt DateTime  @default(now())
+  /// What this message is a reply to.
+  ///
+  /// Constrained to the same conversation in `sendMessage`, not by the schema: a
+  /// reply pointing at another thread would quote that thread's text into a room
+  /// its author never joined, which is the one way this column could leak
+  /// anything. `SetNull` on delete rather than cascade — removing the quoted
+  /// message must not take the answers to it with it.
+  replyToId String?
+  replyTo   Message?  @relation("messageReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   Message[] @relation("messageReply")
+
+  createdAt DateTime @default(now())
+
+  /// Set the first time the sender rewrites the body, so the bubble can say so.
+  /// An edit that nobody can see having happened is a way to put words in your own
+  /// mouth after the fact.
+  editedAt  DateTime?
   deletedAt DateTime?
 
   @@index([conversationId, createdAt(sort: Desc)])
+  @@index([replyToId])
 }
 
 /// Private image bytes for a DM.

@@ -402,6 +402,63 @@ export function DoubleCheckIcon({ className }: IconProps) {
   );
 }
 
+/**
+ * More. Three dots in a row.
+ *
+ * Horizontal rather than vertical: every one of these in the app opens a menu that
+ * drops *below* the control, and a vertical trio reads as "the list continues
+ * downward" — which is the scroll affordance, not this.
+ *
+ * Filled circles, which is the one place a dot may break the stroke rule: a 1.7px
+ * ring of r=1 is a grey smudge at 14px, and three of them look like dirt on the
+ * screen rather than a control.
+ */
+export function DotsIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden className={className}>
+      <circle cx="6" cy="12" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="18" cy="12" r="1.6" />
+    </svg>
+  );
+}
+
+/**
+ * Reply. An arrow turning back on itself.
+ *
+ * Points left, because a reply goes back to something already said and the thread
+ * reads left-to-right. The tail is one path with the head, so the corner stays a
+ * real arc at 14px instead of two strokes meeting at a gap.
+ */
+export function ReplyIcon({ className }: IconProps) {
+  return (
+    <svg {...stroke} className={className}>
+      <path d="M9.4 6.6 4.8 11.2l4.6 4.6" />
+      <path d="M4.8 11.2h8.6a5.8 5.8 0 0 1 5.8 5.8v.4" />
+    </svg>
+  );
+}
+
+/** Copy. Two offset rounded squares — the back one showing at two corners only. */
+export function CopyIcon({ className }: IconProps) {
+  return (
+    <svg {...stroke} className={className}>
+      <rect x="9" y="9" width="10.4" height="10.4" rx="2.4" />
+      <path d="M15 6.6V6a1.6 1.6 0 0 0-1.6-1.6H6.6A2.2 2.2 0 0 0 4.4 6.6v6.8A1.6 1.6 0 0 0 6 15h.6" />
+    </svg>
+  );
+}
+
+/** Edit. A nib on a stroke, with the ferrule crossing it. */
+export function PencilIcon({ className }: IconProps) {
+  return (
+    <svg {...stroke} className={className}>
+      <path d="M16.2 4.6a2.2 2.2 0 0 1 3.2 3.2L8.6 18.6l-4.2 1 1-4.2Z" />
+      <path d="m14.4 6.4 3.2 3.2" />
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Calling
 // ---------------------------------------------------------------------------
@@ -505,8 +562,9 @@ export function InstallIcon({ className }: IconProps) {
 /**
  * The moderator badge: a tick inside a scalloped disc.
  *
- * Filled rather than stroked, and the only filled glyph in the set. That is
- * deliberate — a badge has to read as a *mark on* the name rather than another
+ * Filled rather than stroked, and the only filled *shape* in the set — the dots in
+ * {@link DotsIcon} are the other exception, and they are dots. That is
+ * deliberate: a badge has to read as a *mark on* the name rather than another
  * control beside it, and at 14px a stroked scallop turns to mush. The tick is
  * punched out of the fill with the panel colour supplied by the caller, so the
  * badge takes the accent of whatever it is sitting on.

@@ -35,7 +35,10 @@ const msg = (id: string, offset: number, over: Partial<Msg> = {}): Msg => ({
   body: `body ${id}`,
   attachmentKey: null,
   createdAt: at(offset),
+  editedAt: null,
   deletedAt: null,
+  replyToId: null,
+  replyTo: null,
   ...over,
 });
 

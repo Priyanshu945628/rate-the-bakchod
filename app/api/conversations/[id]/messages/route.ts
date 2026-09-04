@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { authorizeWrite, handleRouteError, jsonError, readJsonBody } from "@/lib/api";
 import { getCurrentUser } from "@/lib/auth";
-import { deleteMessage, fetchThread, sendMessage } from "@/lib/messages";
+import { deleteMessage, editMessage, fetchThread, sendMessage } from "@/lib/messages";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +31,7 @@ export async function GET(request: Request, { params }: Ctx) {
   }
 }
 
-/** Send. `{ body }`, `{ attachmentKey }`, or both. */
+/** Send. `{ body }`, `{ attachmentKey }`, or both, and optionally `{ replyToId }`. */
 export async function POST(request: Request, { params }: Ctx) {
   const auth = await authorizeWrite("message");
   if ("response" in auth) return auth.response;
@@ -41,6 +41,7 @@ export async function POST(request: Request, { params }: Ctx) {
     const raw = (await readJsonBody(request)) as {
       body?: unknown;
       attachmentKey?: unknown;
+      replyToId?: unknown;
     };
     if (raw.body !== undefined && raw.body !== null && typeof raw.body !== "string") {
       return jsonError("`body` must be a string.", 400);
@@ -52,13 +53,46 @@ export async function POST(request: Request, { params }: Ctx) {
     ) {
       return jsonError("`attachmentKey` must be a string.", 400);
     }
+    if (
+      raw.replyToId !== undefined &&
+      raw.replyToId !== null &&
+      typeof raw.replyToId !== "string"
+    ) {
+      return jsonError("`replyToId` must be a string.", 400);
+    }
 
     const message = await sendMessage(auth.user, {
       conversationId: id,
       body: typeof raw.body === "string" ? raw.body : null,
       attachmentKey: typeof raw.attachmentKey === "string" ? raw.attachmentKey : null,
+      // Checked against *this* conversation in `sendMessage`, not here — a reply id
+      // from another thread is a leak, not a validation error.
+      replyToId: typeof raw.replyToId === "string" ? raw.replyToId : null,
     });
     return NextResponse.json({ message }, { status: 201, headers: { "cache-control": "no-store" } });
+  } catch (err) {
+    return handleRouteError(err);
+  }
+}
+
+/**
+ * Rewrite one of your own messages. `{ id, body }`.
+ *
+ * Same shape as DELETE below, and for the same reason: the path's conversation id is
+ * not consulted, because ownership of the message is the only thing that decides it
+ * and `editMessage` puts `senderId` in the `where`.
+ */
+export async function PATCH(request: Request) {
+  const auth = await authorizeWrite("message");
+  if ("response" in auth) return auth.response;
+
+  try {
+    const raw = (await readJsonBody(request)) as { id?: unknown; body?: unknown };
+    if (typeof raw.id !== "string") return jsonError("Which message?", 400);
+    if (typeof raw.body !== "string") return jsonError("`body` must be a string.", 400);
+
+    const message = await editMessage(auth.user, raw.id, raw.body);
+    return NextResponse.json({ message }, { headers: { "cache-control": "no-store" } });
   } catch (err) {
     return handleRouteError(err);
   }

@@ -34,6 +34,7 @@ import type {
   ClientConversationList,
   ClientCounterpart,
   ClientMessage,
+  ClientReplyRef,
   ClientThread,
   ClientThreadEntry,
 } from "./types";
@@ -357,7 +358,20 @@ const messageSelect = {
   body: true,
   attachmentKey: true,
   createdAt: true,
+  editedAt: true,
   deletedAt: true,
+  replyToId: true,
+  // One level deep, deliberately. A reply to a reply quotes only its immediate
+  // parent, so nesting further would fetch a chain nothing renders.
+  replyTo: {
+    select: {
+      id: true,
+      senderId: true,
+      body: true,
+      attachmentKey: true,
+      deletedAt: true,
+    },
+  },
 } satisfies Prisma.MessageSelect;
 
 type MessageRow = Prisma.MessageGetPayload<{ select: typeof messageSelect }>;
@@ -379,6 +393,38 @@ function attachmentUrl(key: string): string {
   return `/api/message-asset/${key}`;
 }
 
+/** How much of a quoted message the reply strip carries. One line's worth. */
+const REPLY_EXCERPT_CHARS = 120;
+
+/**
+ * The quoted line above a reply.
+ *
+ * A quote of a message that has since been unsent says so and carries nothing —
+ * otherwise a reply would be a way to keep a copy of something the sender
+ * deleted, which is the whole point of the delete.
+ *
+ * Newlines are flattened: this renders on one clamped line, and a quote of a
+ * twelve-line message should not push the bubble it belongs to off the screen.
+ */
+function toReplyRef(row: MessageRow["replyTo"]): ClientReplyRef | null {
+  if (!row) return null;
+  const deleted = row.deletedAt !== null;
+  const flat = (row.body ?? "").replace(/\s+/g, " ").trim();
+  return {
+    id: row.id,
+    senderId: row.senderId,
+    excerpt: deleted
+      ? null
+      : flat
+        ? flat.length > REPLY_EXCERPT_CHARS
+          ? `${flat.slice(0, REPLY_EXCERPT_CHARS)}…`
+          : flat
+        : null,
+    hasImage: !deleted && row.attachmentKey !== null,
+    deleted,
+  };
+}
+
 /**
  * A message as one side of the thread sees it.
  *
@@ -393,9 +439,13 @@ function toClientMessage(row: MessageRow, userId: string): ClientMessage {
     body: deleted ? null : row.body,
     imageUrl: deleted || !row.attachmentKey ? null : attachmentUrl(row.attachmentKey),
     createdAt: row.createdAt.toISOString(),
+    editedAt: deleted ? null : (row.editedAt?.toISOString() ?? null),
     deleted,
     mine: row.senderId === userId,
     senderId: row.senderId,
+    // Kept on a deleted message: the reply is still an answer to something, and
+    // dropping the quote would leave a tombstone that reads as unprompted.
+    replyTo: toReplyRef(row.replyTo),
   };
 }
 
@@ -528,14 +578,17 @@ export interface SendInput {
   body?: string | null;
   /** A key from `putMessageImage`, uploaded separately and attached here. */
   attachmentKey?: string | null;
+  /** The message being replied to. Must be in this same conversation. */
+  replyToId?: string | null;
 }
 
 /**
  * Put one message in a thread.
  *
  * The order is deliberate: membership, then policy, then attachment ownership, then
- * the write. Every one of those is a `where` against the sender's own id, so there
- * is no point at which a row is fetched and *then* refused.
+ * the reply target, then the write. Every one of those is a `where` against the
+ * sender's own id or their own conversation, so there is no point at which a row is
+ * fetched and *then* refused.
  */
 export async function sendMessage(sender: User, input: SendInput): Promise<ClientMessage> {
   const body = typeof input.body === "string" ? input.body.trim() : "";
@@ -567,6 +620,19 @@ export async function sendMessage(sender: User, input: SendInput): Promise<Clien
 
   if (attachmentKey) await claimAttachment(sender.id, attachmentKey);
 
+  // The `conversationId` in this `where` is the whole security of the feature. A
+  // reply id is a client-supplied row id, and without it a crafted request would
+  // quote any message in the database — including one from a thread the sender was
+  // never in — straight into a bubble the recipient can read.
+  const replyToId = input.replyToId ?? null;
+  if (replyToId) {
+    const parent = await prisma.message.findFirst({
+      where: { id: replyToId, conversationId: input.conversationId },
+      select: { id: true },
+    });
+    if (!parent) throw new PostServiceError("That message is not in this thread.", 400);
+  }
+
   const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
@@ -574,6 +640,7 @@ export async function sendMessage(sender: User, input: SendInput): Promise<Clien
         senderId: sender.id,
         body: body || null,
         attachmentKey,
+        replyToId,
       },
       select: messageSelect,
     }),
@@ -636,6 +703,7 @@ async function fanOutMessage(
       body: message.body,
       imageUrl: message.attachmentKey ? attachmentUrl(message.attachmentKey) : null,
       createdAt: message.createdAt.toISOString(),
+      replyTo: toReplyRef(message.replyTo),
       author: { id: sender.id, handle: sender.handle, displayName: sender.displayName },
     },
   };
@@ -735,8 +803,84 @@ export async function notifyTyping(userId: string, conversationId: string): Prom
 }
 
 // ---------------------------------------------------------------------------
-// Deleting
+// Editing and deleting
 // ---------------------------------------------------------------------------
+
+/**
+ * Tell both ends that one message is not what it was.
+ *
+ * One event covers a rewrite and an unsend, because from the thread's point of
+ * view they are the same thing: an entry it already has, changed. The strip on a
+ * delete happens here — the payload leaves with `body: null`, so a tombstone never
+ * travels with the text it is replacing.
+ *
+ * Addressed to every member, which includes the sender: their own other tabs are
+ * showing the old words too.
+ */
+async function fanOutUpdate(
+  conversationId: string,
+  memberIds: string[],
+  update: { messageId: string; body: string | null; editedAt: Date | null; deleted: boolean },
+): Promise<void> {
+  publishTo(memberIds, {
+    type: "message-update",
+    conversationId,
+    messageId: update.messageId,
+    body: update.deleted ? null : update.body,
+    editedAt: update.editedAt?.toISOString() ?? null,
+    deleted: update.deleted,
+  });
+}
+
+/**
+ * Rewrite your own message.
+ *
+ * Only the words, and only a message that had words to begin with: `body: { not:
+ * null }` in the `where` keeps this off image-only messages, where "edit" would
+ * mean captioning a photo after the recipient had already seen it bare.
+ *
+ * `editedAt` is set on every edit and the bubble shows it. There is no silent
+ * version of this — an edit nobody can see having happened is a way to put
+ * different words in your own mouth after they have been read and answered.
+ */
+export async function editMessage(
+  user: User,
+  messageId: string,
+  nextBody: string,
+): Promise<ClientMessage> {
+  const body = nextBody.trim();
+  if (!body) throw new PostServiceError("An edit cannot be empty.", 400);
+  if (body.length > limits.messageMaxLength) {
+    throw new PostServiceError(`Messages max ${limits.messageMaxLength} characters.`, 400);
+  }
+
+  const existing = await prisma.message.findFirst({
+    where: { id: messageId, senderId: user.id, deletedAt: null, body: { not: null } },
+    select: {
+      id: true,
+      conversationId: true,
+      conversation: { select: { members: { select: { userId: true } } } },
+    },
+  });
+  // Not-yours, not-there and nothing-to-edit are one 404. Which of the three it
+  // was is not the sender's business.
+  if (!existing) throw new PostServiceError("That is not your message.", 404);
+
+  const editedAt = new Date();
+  const message = await prisma.message.update({
+    where: { id: existing.id },
+    data: { body, editedAt },
+    select: messageSelect,
+  });
+
+  await fanOutUpdate(
+    existing.conversationId,
+    existing.conversation.members.map((m) => m.userId),
+    { messageId: message.id, body, editedAt, deleted: false },
+  );
+
+  return toClientMessage(message, user.id);
+}
 
 /**
  * Delete your own message.
@@ -749,7 +893,12 @@ export async function notifyTyping(userId: string, conversationId: string): Prom
 export async function deleteMessage(user: User, messageId: string): Promise<void> {
   const message = await prisma.message.findFirst({
     where: { id: messageId, senderId: user.id, deletedAt: null },
-    select: { id: true, conversationId: true, attachmentKey: true },
+    select: {
+      id: true,
+      conversationId: true,
+      attachmentKey: true,
+      conversation: { select: { members: { select: { userId: true } } } },
+    },
   });
   // Not-yours and not-there are the same 404. Which of the two it was is not the
   // sender's business.
@@ -768,6 +917,14 @@ export async function deleteMessage(user: User, messageId: string): Promise<void
         ]
       : []),
   ]);
+
+  // After the write, not before: an unsend that lit up the other end and then
+  // failed to commit would be a message that reads as deleted and is not.
+  await fanOutUpdate(
+    message.conversationId,
+    message.conversation.members.map((m) => m.userId),
+    { messageId: message.id, body: null, editedAt: null, deleted: true },
+  );
 }
 
 // ---------------------------------------------------------------------------

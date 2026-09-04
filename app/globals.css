@@ -5,7 +5,15 @@
 
    Three standing rules:
 
-   1. NO GRADIENTS. Every fill in this file is flat.
+   1. NO GRADIENTS, with one named exception. Every fill in the app
+      is flat; the messages surface is not. A thread is the one
+      screen you sit inside for an hour rather than scroll past, and
+      it gets glass panels, a soft glow under the conversation and
+      washed bubbles to give it depth the feed does not need. That
+      exception is spelled out at the bottom of this file, scoped to
+      a `chat-*` prefix, and nothing outside `/messages` may use it —
+      the moment a gradient appears in a post card this rule is gone
+      and the app looks like every other one.
    2. The ground is NEUTRAL, never warm. A warm dark grey at low
       saturation reads as dirty — brown, nicotine, unwashed. The same
       value with the hue pulled out reads as a machined surface. This
@@ -18,6 +26,13 @@
       over a hairline border — and the one thing that gets pure white
       is the single primary action on a surface, plus leaderboard rank
       numbers. Everything else sits below it.
+
+      The chat surface is the exception here too, and only here:
+      `--color-chat` carries the read receipts, the live link in a
+      message and the send button. Blue is what a messaging app is
+      *for* — it marks the difference between "delivered" and "read"
+      in a place where that difference matters — and confining it to
+      one route is what keeps the rest of the app monochrome.
 
    The palette below is the default (`graphite`). Three alternates
    live at the bottom of this block and are selected by `data-palette`
@@ -53,6 +68,16 @@
      something is wrong. */
   --color-danger: #d6584e;
 
+  /* The chat surface's one colour — read receipts, live links, send.
+     Nothing outside /messages may reach for it; see rule 3. It is a
+     `--color-*` so Tailwind generates `text-chat` / `bg-chat` /
+     `border-chat`, and so a palette can retint it in one line.
+     `--color-chat-ink` is what sits *on* a filled chat button, and it
+     is not always white: plum's chat colour is its own light violet,
+     where a white glyph would disappear. */
+  --color-chat: #4c8bff;
+  --color-chat-ink: #ffffff;
+
   --radius-card: 16px;
   --radius-ctl: 10px;
   --radius-pill: 999px;
@@ -86,6 +111,22 @@
      on a warm ground this is the thing that turned everything grey. */
   --edge: rgba(255, 255, 255, 0.055);
   --track: rgba(255, 255, 255, 0.1);
+
+  /* The chat surface's washes. White at low alpha over whatever ground
+     the active palette put down, which is why — unlike everything else
+     in this block — the palettes below do not retint them: a 5% white
+     wash is the same relationship to its ground in all four. Only
+     `--color-chat` above changes, because that one is a hue.
+
+     `--chat-glow` is the pool of light under the conversation. Derived
+     from the chat colour so it follows a retint, and kept low: a glow
+     you can name is a glow that is too strong. */
+  --chat-mine-top: rgba(255, 255, 255, 0.12);
+  --chat-mine-bottom: rgba(255, 255, 255, 0.055);
+  --chat-theirs-top: rgba(255, 255, 255, 0.05);
+  --chat-theirs-bottom: rgba(255, 255, 255, 0.022);
+  --chat-bubble-edge: rgba(255, 255, 255, 0.09);
+  --chat-glow: color-mix(in srgb, var(--color-chat) 20%, transparent);
 }
 
 /* --- Alternates ------------------------------------------------- */
@@ -105,6 +146,10 @@ html[data-palette="onyx"] {
   --color-accent: #ffffff;
   --color-accent-ink: #000000;
   --color-danger: #d6584e;
+  /* A hair brighter than graphite's: on true black a mid blue loses
+     the contrast the panel fill was lending it. */
+  --color-chat: #5691ff;
+  --color-chat-ink: #ffffff;
   --glass: rgba(10, 10, 10, 0.9);
   --glass-2: rgba(16, 16, 16, 0.72);
   --glass-bar: rgba(0, 0, 0, 0.82);
@@ -127,6 +172,8 @@ html[data-palette="slate"] {
   --color-accent: #ffffff;
   --color-accent-ink: #0a0c10;
   --color-danger: #dd5f52;
+  --color-chat: #5590ff;
+  --color-chat-ink: #ffffff;
   --glass: rgba(17, 20, 25, 0.88);
   --glass-2: rgba(22, 26, 32, 0.72);
   --glass-bar: rgba(10, 12, 16, 0.8);
@@ -150,6 +197,12 @@ html[data-palette="plum"] {
   --color-accent: #a89bd6;
   --color-accent-ink: #09090b;
   --color-danger: #d6584e;
+  /* Plum already spent its one hue. A blue read tick beside a violet
+     accent is two colours arguing, so the chat colour here *is* the
+     palette's accent — and its ink goes dark, because a white glyph on
+     light violet is not there at all. */
+  --color-chat: #a89bd6;
+  --color-chat-ink: #09090b;
   --glass: rgba(16, 16, 18, 0.88);
   --glass-2: rgba(21, 21, 26, 0.72);
   --glass-bar: rgba(11, 11, 13, 0.8);
@@ -175,7 +228,8 @@ body {
   letter-spacing: -0.006em;
 }
 
-/* Flat scrollbars — no gradient, no chrome */
+/* Flat scrollbars — no chrome, and no gradient even on the chat surface:
+   a bar you drag should look like the same bar everywhere. */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-line-strong) transparent;
@@ -211,9 +265,10 @@ body {
    Loading placeholders.
 
    An opacity pulse, not a sweep. A shimmer is a gradient travelling
-   across a box, and there are no gradients in this theme; breathing
-   the fill between two flat values says "not yet" just as clearly
-   and costs one property.
+   across a box, and the one place this theme allows a gradient is the
+   chat surface — where nothing is ever loading, because a thread
+   arrives with the page. Breathing the fill between two flat values
+   says "not yet" just as clearly and costs one property.
 
    `skeleton` is the block itself. `skeleton-still` marks the pieces
    of a stack that should hold steady while its siblings pulse —
@@ -321,9 +376,11 @@ html[data-keyboard="open"] .kb-flush {
    header says it in words at the same time; this one says it in the
    place you are already looking.
 
-   Opacity only, so it obeys the no-gradient rule and costs nothing
-   to composite. The stagger is a negative delay rather than three
-   keyframe sets, which is what keeps the three dots on one cycle.
+   Opacity only — it costs nothing to composite, and it means the dots
+   read the same whether they are sitting on the chat surface's washed
+   bubble or on a flat panel. The stagger is a negative delay rather
+   than three keyframe sets, which is what keeps the three dots on one
+   cycle.
    --------------------------------------------------------------- */
 @keyframes typing-dot {
   0%,
@@ -411,7 +468,8 @@ html[data-keyboard="open"] .kb-flush {
   outline: none;
 }
 
-/* Range input — flat track and thumb, no gradient */
+/* Range input — flat track and thumb. The player sits over media, which
+   is busy enough without a gradient under the scrubber. */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
@@ -507,4 +565,95 @@ input[type="range"]::-moz-range-thumb {
 
 @utility story-land {
   animation: rtb-story-land 380ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* ---------------------------------------------------------------
+   The chat surface — rule 1's one exception.
+
+   Everything below is prefixed `chat-` and is used by
+   `components/messages/*` and nothing else. The reason the exception
+   exists: the feed is a list you scroll past, so flat surfaces and a
+   hairline border are exactly right for it, but a thread is a room you
+   sit in. Depth there is not decoration — it is what separates the two
+   sides of a conversation at a glance, from across the desk, without
+   reading a word.
+
+   All of it is white-alpha over the palette's own ground plus one hue
+   from `--color-chat`, so none of it hardcodes a colour and all four
+   palettes get a coherent version for free.
+   --------------------------------------------------------------- */
+
+/* The pool of light under the conversation.
+
+   A `::before` at `z-index: -1` inside a stacking context of its own,
+   which puts it above the panel's fill and below the messages — the one
+   arrangement where the glow lights the surface rather than washing out
+   the text on it. Two stops, both anchored past the bottom edge, so what
+   lands inside the panel is the top of a much larger circle: a glow whose
+   centre is visible reads as a spotlight aimed at the composer. */
+@utility chat-glow {
+  position: relative;
+  isolation: isolate;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(115% 62% at 50% 116%, var(--chat-glow) 0%, transparent 64%),
+      radial-gradient(75% 45% at 50% 104%, rgba(255, 255, 255, 0.045) 0%, transparent 72%);
+  }
+}
+
+/* The two sides of the conversation.
+
+   Yours is the lighter one, because a message you wrote is the one you
+   already know the contents of — it wants to be found, not read. Both are
+   a vertical wash rather than a flat fill: a bubble lit from the top sits
+   *on* the surface, and two flat greys at these values just look like two
+   greys. The top edge is a real hairline on top of the wash, which is what
+   keeps the shape crisp where the two bubbles overlap in the eye. */
+@utility chat-mine {
+  background-image: linear-gradient(180deg, var(--chat-mine-top), var(--chat-mine-bottom));
+  border: 1px solid var(--chat-bubble-edge);
+}
+
+@utility chat-theirs {
+  background-image: linear-gradient(180deg, var(--chat-theirs-top), var(--chat-theirs-bottom));
+  border: 1px solid var(--color-line);
+}
+
+/* The composer, and the menu that drops off a bubble. Same recipe as
+   `panel` but rounded to a pill's worth and washed like a bubble, so the
+   thing you type into belongs to the conversation rather than to the
+   chrome around it. */
+@utility chat-pill {
+  background-color: var(--glass-2);
+  background-image: linear-gradient(180deg, var(--chat-theirs-top), transparent);
+  border: 1px solid var(--color-line);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Landing on the message a reply was quoting.
+
+   The strip above a reply scrolls its original into view, and a jump with
+   no acknowledgement leaves you looking at a thread wondering which line
+   you were sent to. One pulse of the chat colour, then gone — a highlight
+   that stays is a selection, which this is not. Collapsed by the
+   reduced-motion rule above, which is fine: the scroll still happened. */
+@keyframes rtb-chat-flash {
+  0% {
+    box-shadow: 0 0 0 2px var(--color-chat);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+@utility chat-flash {
+  animation: rtb-chat-flash 1.1s ease-out;
+  border-radius: var(--radius-card);
 }

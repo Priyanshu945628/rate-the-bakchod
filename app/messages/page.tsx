@@ -8,7 +8,7 @@ import { MessageIcon } from "@/components/icons";
  */
 export default function MessagesIndexPage() {
   return (
-    <section className="panel hidden flex-1 flex-col items-center justify-center gap-2 lg:flex">
+    <section className="panel chat-glow hidden flex-1 flex-col items-center justify-center gap-2 lg:flex">
       <MessageIcon className="h-6 w-6 text-faint" />
       <p className="text-sm text-faint">Pick a conversation.</p>
     </section>

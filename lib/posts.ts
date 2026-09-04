@@ -384,6 +384,89 @@ export async function reportPost(reporter: User, postId: string, reason: string)
 }
 
 // ---------------------------------------------------------------------------
+// An author's own post
+// ---------------------------------------------------------------------------
+
+/**
+ * The one post a query like this may act on: yours, still standing, not a story.
+ *
+ * `authorId` belongs in the `where` and not in an `if` above it. Somebody else's
+ * post and a post that was never there come back as the same absent row, and get
+ * the same 404 — there is no reply that confirms a post exists but is not yours.
+ * `FEED_SCOPE` adds the rest: a story is `deleteStory`'s business, and an
+ * already-deleted post has nothing left to change.
+ */
+async function ownPost(author: User, postId: string): Promise<string> {
+  const post = await prisma.post.findFirst({
+    where: { id: postId, authorId: author.id, modDeletedAt: null, ...FEED_SCOPE },
+    select: { id: true },
+  });
+  if (!post) throw new PostServiceError("That is not your post.", 404);
+  return post.id;
+}
+
+/**
+ * Rewrite your own caption.
+ *
+ * The caption is the only part of a post its author can revise, and that is not a
+ * missing feature. The media is encrypted, hashed against duplicates and already
+ * archived, so replacing it would be a different post; the score underneath it is
+ * other people's opinion of what they actually saw. What is left is the words the
+ * author chose, held to the same limit they were held to the first time.
+ */
+export async function editPostCaption(
+  author: User,
+  postId: string,
+  raw: unknown,
+): Promise<string | null> {
+  if (raw !== null && raw !== undefined && typeof raw !== "string") {
+    throw new PostServiceError("Caption has to be text.");
+  }
+  const caption = cleanCaption(raw as string | null | undefined);
+
+  const id = await ownPost(author, postId);
+  await prisma.post.update({ where: { id }, data: { caption } });
+  return caption;
+}
+
+/**
+ * Delete your own post.
+ *
+ * The same crypto-shred `deleteStory` performs, for the same reason: the ciphertext
+ * is on the Internet Archive, which has no delete, so destroying the wrapped key
+ * *is* the deletion. Three nulled columns, and the bytes can never be read again by
+ * anyone, this app included.
+ *
+ * The row stays, hidden, and so do the ratings hanging off it — `User.ratingsSum`
+ * and `ratingsCount` are accumulated as ratings arrive and are never walked back.
+ * That is deliberate twice over: those people really did rate what they saw, and a
+ * score you could raise by deleting your worst post would not be a score.
+ */
+export async function deleteOwnPost(author: User, postId: string): Promise<void> {
+  const id = await ownPost(author, postId);
+
+  await prisma.$transaction([
+    prisma.post.update({
+      where: { id },
+      data: {
+        isHidden: true,
+        hiddenAt: new Date(),
+        wrappedKey: null,
+        keyIv: null,
+        keyTag: null,
+      },
+    }),
+    // A pin to a post that no longer renders already resolves to nothing, so this
+    // tidies rather than fixes — but it keeps "pinned" from being a setting that
+    // silently points at a deleted post.
+    prisma.profileTheme.updateMany({
+      where: { userId: author.id, pinnedPostId: id },
+      data: { pinnedPostId: null },
+    }),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // Reading the feed
 // ---------------------------------------------------------------------------
 
