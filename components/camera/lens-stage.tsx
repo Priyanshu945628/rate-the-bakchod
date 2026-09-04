@@ -180,7 +180,10 @@ export function LensStage({ video, lens, mirrored, tone }: Props) {
       ref={canvas}
       aria-hidden
       style={{ transform: mirrored ? "scaleX(-1)" : undefined }}
-      className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+      // `object-cover`, matching the `<video>` underneath. Both have the frame's own aspect
+      // and the same box, so the browser crops them identically and the art stays on the
+      // face — no part of this has to know where the crop fell.
+      className="pointer-events-none absolute inset-0 h-full w-full object-cover"
     />
   );
 }

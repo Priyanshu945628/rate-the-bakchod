@@ -25,8 +25,14 @@ import { LensStage } from "./lens-stage";
  * both in `camera-launcher.tsx` — and it ends in one of the two places a picture can go
  * here: a story, or a post. No file picker anywhere in between.
  *
- * One dial under the preview holds both kinds of lens, because turning it is one gesture
- * either way, but they land at different moments:
+ * The viewfinder is the screen, and every control floats on it. That is not decoration: a
+ * camera whose picture sits in a box with the buttons stacked underneath spends a third of
+ * a phone on chrome, and the thing being framed is the thing that got smaller. The frame
+ * covers rather than fits, and `coverCrop` crops the shutter to the same rectangle, so
+ * filling the screen costs nothing in what actually gets sent.
+ *
+ * One dial holds both kinds of lens, with the shutter sitting in the middle of it, because
+ * turning it is one gesture either way. They land at different moments:
  *
  *   - a **colour** preset is CSS on the preview and `ctx.filter` on the bytes, so what
  *     gets sent is what was on screen. A still keeps its unfiltered frame and can be
@@ -392,7 +398,8 @@ export function CameraSheet({
   function capture() {
     const video = preview.current;
     if (!video?.videoWidth) return;
-    const size = fit(video.videoWidth, video.videoHeight, limits.maxImageEdge);
+    const crop = coverCrop(video);
+    const size = fit(crop.width, crop.height, limits.maxImageEdge);
     const canvas = document.createElement("canvas");
     canvas.width = size.width;
     canvas.height = size.height;
@@ -405,7 +412,17 @@ export function CameraSheet({
     // Deliberately unfiltered. `renderFrame` bakes whichever colour preset is chosen at
     // the moment Send is pressed, and a face lens goes up as it is — which is what keeps
     // the dial under a still live.
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(
+      video,
+      crop.left,
+      crop.top,
+      crop.width,
+      crop.height,
+      0,
+      0,
+      size.width,
+      size.height,
+    );
     canvas.toBlob(
       (blob) => {
         if (!blob) {
@@ -447,7 +464,11 @@ export function CameraSheet({
       return;
     }
 
-    const size = fit(video.videoWidth, video.videoHeight, CLIP_MAX_EDGE, true);
+    // Read once. A take is drawn from a fixed rectangle of the frame — chasing the element's
+    // box every frame would measure layout thirty times a second, and a clip whose framing
+    // moved because the window was resized mid-take is not a clip anybody asked for.
+    const crop = coverCrop(video);
+    const size = fit(crop.width, crop.height, CLIP_MAX_EDGE, true);
     const canvas = document.createElement("canvas");
     canvas.width = size.width;
     canvas.height = size.height;
@@ -461,7 +482,17 @@ export function CameraSheet({
     live.current = css;
     const draw = () => {
       ctx.filter = live.current || "none";
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(
+        video,
+        crop.left,
+        crop.top,
+        crop.width,
+        crop.height,
+        0,
+        0,
+        size.width,
+        size.height,
+      );
       frame.current = requestAnimationFrame(draw);
     };
     frame.current = requestAnimationFrame(draw);
@@ -550,20 +581,98 @@ export function CameraSheet({
     }
   }
 
+  /**
+   * The shutter, built up here because it is handed to the dial to sit inside rather than
+   * rendered where it appears — and it is still the one button when there is no dial.
+   */
+  const shutter = (
+    <button
+      type="button"
+      onClick={mode === "photo" ? capture : recording ? stop : record}
+      disabled={!ready}
+      aria-label={
+        mode === "photo" ? "Take photo" : recording ? "Stop recording" : "Start recording"
+      }
+      className="mx-1 flex h-[68px] w-[68px] shrink-0 items-center justify-center rounded-full border-2 border-accent/80 transition-transform active:scale-95 disabled:opacity-40"
+    >
+      <span
+        className={`transition-all ${
+          mode === "photo"
+            ? "h-14 w-14 rounded-full bg-accent"
+            : recording
+              ? "h-6 w-6 rounded-[5px] bg-danger"
+              : "h-14 w-14 rounded-full bg-danger"
+        }`}
+      />
+    </button>
+  );
+
   return createPortal(
     <div role="dialog" aria-modal="true" aria-label="Camera" className="fixed inset-0 z-[60] bg-black">
       {/* The caption sits at the bottom of the screen, so this is one of the few surfaces
           that has to know where the on-screen keyboard is. */}
       <KeyboardInset />
 
-      <div ref={shell} tabIndex={-1} className="flex h-full w-full flex-col outline-none">
-        <div className="flex items-center px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
+      {/* The viewfinder is the whole screen and everything else floats on it, because that
+          is the shape a camera has: the picture is the interface, and controls that take a
+          third of the screen to sit under it made the picture a third smaller for nothing.
+          Positioned, so the overlays have something to be absolute against. */}
+      <div ref={shell} tabIndex={-1} className="relative h-full w-full overflow-hidden outline-none">
+        {/* `object-cover` — a viewfinder that fits inside the screen leaves bars, and bars
+            in a camera read as a fault. The shutter crops to match, so what is framed is
+            still exactly what gets sent; `coverCrop` is the half that keeps that true. */}
+        <video
+          ref={preview}
+          autoPlay
+          muted
+          playsInline
+          hidden={shot !== null}
+          onLoadedMetadata={() => setReady(true)}
+          style={{ filter: css || undefined, transform: mirrored ? "scaleX(-1)" : undefined }}
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+
+        {/* The live face lens, drawn over the preview. Mounted only while one is selected,
+            so an ordinary viewfinder is still just a `<video>` with nothing on top of it. */}
+        {shot === null && isFaceLens(lens) && ready ? (
+          <LensStage video={preview} lens={lens} mirrored={mirrored} tone={filters} />
+        ) : null}
+
+        {/* A shot in review is contained rather than covered. It was already cropped to the
+            screen it was framed on, so this changes nothing about how it looks — but if the
+            window is a different shape by now, all of the picture beats a tidy fill. */}
+        {shot?.kind === "IMAGE" ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={drawn ? drawn.url : shot.url}
+            alt=""
+            style={{ filter: css || undefined }}
+            className="absolute inset-0 h-full w-full object-contain"
+          />
+        ) : null}
+
+        {/* Already filtered in the pixels, so no `style` here — and playable, because a
+            clip is the one thing worth watching back before sending it. */}
+        {shot?.kind === "VIDEO" ? (
+          <video
+            src={shot.url}
+            autoPlay
+            playsInline
+            controls
+            className="absolute inset-0 h-full w-full object-contain"
+          />
+        ) : null}
+
+        {/* Over the picture, not above it. Both are their own translucent disc rather than
+            sitting on a scrim, which is what keeps a white shirt behind them readable
+            without dimming the frame somebody is trying to aim. */}
+        <div className="absolute inset-x-0 top-0 flex items-center px-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
           <button
             type="button"
             onClick={onClose}
             disabled={busy !== null}
             aria-label="Close camera"
-            className="flex h-9 w-9 items-center justify-center rounded-pill bg-panel/70 text-muted transition-colors hover:text-ink disabled:opacity-40"
+            className="flex h-9 w-9 items-center justify-center rounded-pill bg-black/45 text-ink transition-colors hover:bg-black/60 disabled:opacity-40"
           >
             <XIcon className="h-4 w-4" />
           </button>
@@ -574,81 +683,35 @@ export function CameraSheet({
               onClick={flip}
               disabled={recording}
               aria-label="Switch camera"
-              className="ml-auto flex h-9 w-9 items-center justify-center rounded-pill bg-panel/70 text-muted transition-colors hover:text-ink disabled:opacity-40"
+              className="ml-auto flex h-9 w-9 items-center justify-center rounded-pill bg-black/45 text-ink transition-colors hover:bg-black/60 disabled:opacity-40"
             >
               <FlipCameraIcon className="h-4 w-4" />
             </button>
           ) : null}
         </div>
 
-        <div className="relative min-h-0 flex-1">
-          {/* `object-contain`, the same call the call window makes: the frame is asked for
-              the right way up, and bars beat a haircut when it comes back some other
-              shape. What is on screen here is exactly what the shutter draws. */}
-          <video
-            ref={preview}
-            autoPlay
-            muted
-            playsInline
-            hidden={shot !== null}
-            onLoadedMetadata={() => setReady(true)}
-            style={{ filter: css || undefined, transform: mirrored ? "scaleX(-1)" : undefined }}
-            className="h-full w-full object-contain"
-          />
+        {recording ? (
+          <span className="absolute left-1/2 top-[max(0.9rem,env(safe-area-inset-top))] flex -translate-x-1/2 items-center gap-1.5 rounded-pill bg-black/60 px-2.5 py-1 text-[11px] font-medium tabular-nums text-ink">
+            <span className="h-1.5 w-1.5 rounded-full bg-danger" />
+            {clock(elapsed)}
+          </span>
+        ) : null}
 
-          {/* The live face lens, drawn over the preview. Mounted only while one is selected,
-              so an ordinary viewfinder is still just a `<video>` with nothing on top of it. */}
-          {shot === null && isFaceLens(lens) && ready ? (
-            <LensStage video={preview} lens={lens} mirrored={mirrored} tone={filters} />
-          ) : null}
-
-          {shot?.kind === "IMAGE" ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={drawn ? drawn.url : shot.url}
-              alt=""
-              style={{ filter: css || undefined }}
-              className="h-full w-full object-contain"
-            />
-          ) : null}
-
-          {/* Already filtered in the pixels, so no `style` here — and playable, because a
-              clip is the one thing worth watching back before sending it. */}
-          {shot?.kind === "VIDEO" ? (
-            <video
-              src={shot.url}
-              autoPlay
-              playsInline
-              controls
-              className="h-full w-full object-contain"
-            />
-          ) : null}
-
-          {recording ? (
-            <span className="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-pill bg-black/60 px-2.5 py-1 text-[11px] font-medium tabular-nums text-ink">
-              <span className="h-1.5 w-1.5 rounded-full bg-danger" />
-              {clock(elapsed)}
-            </span>
-          ) : null}
-        </div>
-
-        <div className="shrink-0 px-3 pt-2 pb-[calc(max(0.75rem,env(safe-area-inset-bottom))+var(--kb))]">
+        <div className="absolute inset-x-0 bottom-0 px-3 pb-[calc(max(0.75rem,env(safe-area-inset-bottom))+var(--kb))]">
           {error ? <p className="mb-2 text-center text-xs text-danger">{error}</p> : null}
 
           {shot ? (
-            <>
+            <div className="mx-auto flex max-w-lg flex-col gap-2 rounded-ctl bg-black/55 p-2">
               {/* A clip gets no dial. It was drawn through its colour preset as it
                   recorded, and a face lens was never on offer for it. */}
               {shot.kind === "IMAGE" && dial.length > 1 ? (
-                <div className="mb-2">
-                  <LensCarousel
-                    lenses={dial}
-                    value={lens}
-                    rendering={rendering}
-                    disabled={busy !== null}
-                    onChange={(id) => void choose(id)}
-                  />
-                </div>
+                <LensCarousel
+                  lenses={dial}
+                  value={lens}
+                  rendering={rendering}
+                  disabled={busy !== null}
+                  onChange={(id) => void choose(id)}
+                />
               ) : null}
 
               <input
@@ -660,7 +723,7 @@ export function CameraSheet({
                 className="h-10 w-full rounded-ctl border border-line bg-panel-2 px-3 text-sm text-ink placeholder:text-faint"
               />
 
-              <div className="mt-2 flex items-center gap-2">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={retake}
@@ -688,65 +751,44 @@ export function CameraSheet({
                   Post
                 </button>
               </div>
-            </>
+            </div>
           ) : (
-            <>
-              {/* The same dial as in review, live. A colour preset changes the preview on
-                  the spot and stays live through a take — that is what makes it an effect
-                  on a clip rather than a decision before one. A face lens cannot show
-                  itself here, so its swatch is the promise and the shutter is where it
-                  is kept. */}
+            <div className="flex flex-col items-center gap-2.5">
+              <div className="flex items-center gap-0.5 rounded-pill border border-line-strong bg-black/45 p-0.5">
+                {MODES.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => switchTo(option)}
+                    disabled={recording}
+                    aria-pressed={mode === option}
+                    className={`h-7 rounded-pill px-4 text-[11px] font-medium capitalize transition-colors disabled:opacity-40 ${
+                      mode === option ? "bg-panel-3 text-ink" : "text-muted hover:text-ink"
+                    }`}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+
+              {/* The dial with the shutter in the middle of it and the lenses parted around
+                  the button they are for. A lens is then a thumb's width from the picture it
+                  is for, which is the whole reason a carousel belongs here and not in a
+                  menu. A colour preset changes the frame on the spot and stays live through
+                  a take; a face lens is drawn on the canvas above by `LensStage`. */}
               {dial.length > 1 ? (
                 <LensCarousel
                   lenses={dial}
                   value={lens}
                   rendering={rendering}
                   disabled={recording}
+                  centre={shutter}
                   onChange={(id) => void choose(id)}
                 />
-              ) : null}
-
-              <div className="mt-3 flex justify-center">
-                <div className="flex items-center gap-0.5 rounded-pill border border-line-strong bg-panel/70 p-0.5">
-                  {MODES.map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => switchTo(option)}
-                      disabled={recording}
-                      aria-pressed={mode === option}
-                      className={`h-7 rounded-pill px-4 text-[11px] font-medium capitalize transition-colors disabled:opacity-40 ${
-                        mode === option ? "bg-panel-3 text-ink" : "text-muted hover:text-ink"
-                      }`}
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="mt-2 flex justify-center">
-                <button
-                  type="button"
-                  onClick={mode === "photo" ? capture : recording ? stop : record}
-                  disabled={!ready}
-                  aria-label={
-                    mode === "photo" ? "Take photo" : recording ? "Stop recording" : "Start recording"
-                  }
-                  className="flex h-[68px] w-[68px] items-center justify-center rounded-full border-2 border-accent/80 transition-transform active:scale-95 disabled:opacity-40"
-                >
-                  <span
-                    className={`transition-all ${
-                      mode === "photo"
-                        ? "h-14 w-14 rounded-full bg-accent"
-                        : recording
-                          ? "h-6 w-6 rounded-[5px] bg-danger"
-                          : "h-14 w-14 rounded-full bg-danger"
-                    }`}
-                  />
-                </button>
-              </div>
-            </>
+              ) : (
+                shutter
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -757,6 +799,48 @@ export function CameraSheet({
 
 /** Photo first: it is what the button is for most of the time. */
 const MODES: Mode[] = ["photo", "video"];
+
+/**
+ * The part of the camera's frame that is actually on screen.
+ *
+ * The viewfinder covers the screen rather than fitting inside it, so a 4:3 webcam in a wide
+ * window has its top and bottom past the edges. Cropping to the same rectangle here is what
+ * keeps the promise the old letterboxed preview kept for free: the picture that gets sent is
+ * the picture that was framed, not whatever else the sensor happened to be pointing at.
+ *
+ * A mirrored preview needs no special case — the crop is centred, and the mirror image of a
+ * centred rectangle is the same rectangle.
+ *
+ * It crops however much it has to, including the case nobody wants: a camera that ignores the
+ * portrait frame `videoConstraints` asks for and hands back a landscape one anyway shows a
+ * narrow vertical slice of itself. Clamping that would be worse than living with it, because
+ * the clamp is exactly where the picture would stop matching the preview it was aimed with.
+ *
+ * Falls back to the whole frame if the element has no size worth measuring. That is the safe
+ * direction to be wrong in: too much in the picture, rather than a face out of it.
+ */
+function coverCrop(video: HTMLVideoElement): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const whole = { left: 0, top: 0, width: video.videoWidth, height: video.videoHeight };
+  const box = video.getBoundingClientRect();
+  if (box.width < 1 || box.height < 1) return whole;
+
+  const frame = video.videoWidth / video.videoHeight;
+  const screen = box.width / box.height;
+  if (!Number.isFinite(frame) || !Number.isFinite(screen)) return whole;
+
+  if (screen > frame) {
+    // Wider than the frame: all of its width is on screen, and its height is trimmed.
+    const height = Math.round(video.videoWidth / screen);
+    return { left: 0, top: Math.round((video.videoHeight - height) / 2), width: whole.width, height };
+  }
+  const width = Math.round(video.videoHeight * screen);
+  return { left: Math.round((video.videoWidth - width) / 2), top: 0, width, height: whole.height };
+}
 
 /**
  * The frame to ask the camera for.
