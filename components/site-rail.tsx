@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { BrandMark } from "./brand-mark";
+import { CameraButton } from "./camera/camera-launcher";
 import { HomeIcon, MessageIcon, ShieldIcon, TrophyIcon, UserIcon } from "./icons";
 import { useRealtime } from "./realtime-provider";
 
@@ -11,6 +12,9 @@ import { useRealtime } from "./realtime-provider";
  * Primary navigation. A floating glass column on the left at desktop widths, the
  * same items as a floating bar at the bottom on phones — one source of truth for
  * both.
+ *
+ * The camera is the one thing the bar has that the column does not. On a phone it wants
+ * to be under a thumb, and at desktop widths the same button is already in the top bar.
  *
  * Editing your profile is not here. It lives on the profile itself, where you can
  * see what you are editing.
@@ -83,6 +87,10 @@ export function SiteRail({
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
+  // Where the `+` goes in the bar: mid-list, so it falls under a thumb instead of at one
+  // end. Signed out there is nowhere for a shot to go, so nothing is inserted at all.
+  const camera = handle ? Math.floor(items.length / 2) : -1;
+
   return (
     <>
       {/* Desktop rail */}
@@ -127,30 +135,35 @@ export function SiteRail({
 
           `kb-hide` takes it off the screen while the on-screen keyboard is up. It is
           `position: fixed`, and on iOS a fixed element does not move for the keyboard —
-          so without this it floats on top of the composer somebody is typing into. */}
+          so without this it floats on top of the composer somebody is typing into.
+
+          `app-chrome` is the other way it leaves: an open thread on a phone is the
+          whole screen, and the thread has its own way back. See `app/globals.css`. */}
       <nav
         aria-label="Main"
-        className="glass-bar kb-hide fixed inset-x-3 bottom-3 z-30 flex h-16 items-stretch rounded-card lg:hidden"
+        className="app-chrome glass-bar kb-hide fixed inset-x-3 bottom-3 z-30 flex h-16 items-stretch rounded-card lg:hidden"
       >
-        {items.map(({ href, label, Icon, dot }) => {
+        {items.map(({ href, label, Icon, dot }, index) => {
           const active = isActive(href);
           const show = Boolean(dot) && unread > 0;
           return (
-            <Link
-              key={href}
-              href={href}
-              aria-current={active ? "page" : undefined}
-              aria-label={show ? `${label}, ${unread} unread` : undefined}
-              className={`relative flex flex-1 flex-col items-center justify-center gap-1 rounded-card text-[11px] ${
-                active ? "text-ink" : "text-muted"
-              }`}
-            >
-              <Icon className="h-5 w-5" />
-              {label}
-              {show ? (
-                <span className="absolute left-1/2 top-2.5 ml-2 h-1.5 w-1.5 rounded-full bg-accent" />
-              ) : null}
-            </Link>
+            <Fragment key={href}>
+              {index === camera ? <CameraButton variant="tab" /> : null}
+              <Link
+                href={href}
+                aria-current={active ? "page" : undefined}
+                aria-label={show ? `${label}, ${unread} unread` : undefined}
+                className={`relative flex flex-1 flex-col items-center justify-center gap-1 rounded-card text-[11px] ${
+                  active ? "text-ink" : "text-muted"
+                }`}
+              >
+                <Icon className="h-5 w-5" />
+                {label}
+                {show ? (
+                  <span className="absolute left-1/2 top-2.5 ml-2 h-1.5 w-1.5 rounded-full bg-accent" />
+                ) : null}
+              </Link>
+            </Fragment>
           );
         })}
       </nav>

@@ -3,7 +3,8 @@ import {
   ORIGINAL,
   PHOTO_FILTERS,
   filterCss,
-} from "@/components/messages/photo-filters";
+  fit,
+} from "@/components/photo-filters";
 
 /**
  * The presets behind the strip under a photo in the composer.
@@ -77,5 +78,37 @@ describe("filterCss", () => {
     // picture as it was picked rather than a throw in the middle of a send.
     expect(filterCss("no-such-filter")).toBe("");
     expect(filterCss("")).toBe("");
+  });
+});
+
+/**
+ * The sizing every capture goes through: a picked photo on its way into a DM, a still off
+ * the camera, and the canvas a clip is recorded from.
+ */
+describe("fit", () => {
+  it("leaves anything already inside the cap alone", () => {
+    expect(fit(800, 600, 1600)).toEqual({ width: 800, height: 600 });
+    expect(fit(1600, 1600, 1600)).toEqual({ width: 1600, height: 1600 });
+  });
+
+  it("caps the longest edge, whichever one that is", () => {
+    expect(fit(3200, 2400, 1600)).toEqual({ width: 1600, height: 1200 });
+    expect(fit(2400, 3200, 1600)).toEqual({ width: 1200, height: 1600 });
+  });
+
+  it("keeps both edges even for a recording", () => {
+    expect(fit(1080, 1920, 1280, true)).toEqual({ width: 720, height: 1280 });
+    // An aspect ratio that does not divide cleanly is where an odd edge would appear,
+    // and an odd edge is a clip some players will not take.
+    const odd = fit(1153, 1920, 1280, true);
+    expect(odd.width % 2).toBe(0);
+    expect(odd.height % 2).toBe(0);
+  });
+
+  it("never rounds an edge away to nothing", () => {
+    expect(fit(1, 1, 1600)).toEqual({ width: 1, height: 1 });
+    expect(fit(3, 4000, 1280, true)).toEqual({ width: 2, height: 1280 });
+    // A camera that reports nothing yet still gets a canvas that can be created.
+    expect(fit(0, 0, 1600)).toEqual({ width: 1, height: 1 });
   });
 });

@@ -11,6 +11,10 @@ import { ChevronLeftIcon } from "@/components/icons";
  * makes the layout jump at exactly the moment it fills in. Same rule as
  * `components/messages/inbox-skeleton.tsx`.
  *
+ * `chat-full` for the same reason: it is what takes the site's top bar and tab bar off a
+ * phone, and a fallback without it would show both for as long as the fetch takes and
+ * then pull them away.
+ *
  * The bubbles sit at the bottom. The real thread scrolls to its last message on open,
  * so placeholders stacked from the top would all slide down when the messages land.
  *
@@ -20,7 +24,7 @@ import { ChevronLeftIcon } from "@/components/icons";
  */
 export default function ThreadLoading() {
   return (
-    <section className="panel flex min-w-0 flex-1 flex-col overflow-hidden">
+    <section className="chat-full panel flex min-w-0 flex-1 flex-col overflow-hidden">
       <header className="flex items-center gap-2 border-b border-line px-2.5 py-2">
         <Link
           href="/messages"

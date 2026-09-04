@@ -105,7 +105,10 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
               layout, because a call has to survive navigating away from the thread it
               was started from. */}
           <CallProvider>
-            <div className="mx-auto flex w-full max-w-[1440px] gap-3 p-3">
+            {/* `app-frame`, `app-main` and the `app-chrome` on both bars are the
+                hooks a full-screen thread hides itself behind — see the last block
+                of `app/globals.css`. They carry nothing on their own. */}
+            <div className="app-frame mx-auto flex w-full max-w-[1440px] gap-3 p-3">
               <SiteRail
                 isAdmin={viewer?.isAdmin}
                 handle={viewer?.handle}
@@ -117,7 +120,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
                     `kb-flush` gives it back while the keyboard is up, because the
                     tab bar has hidden itself by then and the space would otherwise
                     be a gap under the composer. */}
-                <main className="kb-flush pb-28 pt-3 lg:pb-3">{children}</main>
+                <main className="app-main kb-flush pb-28 pt-3 lg:pb-3">{children}</main>
               </div>
             </div>
           </CallProvider>

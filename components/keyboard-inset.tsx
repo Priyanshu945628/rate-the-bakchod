@@ -21,8 +21,14 @@ import { useEffect } from "react";
  * toolbar collapse as "keyboard open" would hide the tab bar every time somebody
  * scrolled.
  *
- * Renders nothing, and only ever mounted on surfaces that actually care — the chat.
- * Elsewhere `--kb` stays at its `0px` default and every `calc()` reading it is inert.
+ * Renders nothing, and only ever mounted on surfaces that actually care: the chat, and
+ * the camera, which puts a caption field at the bottom of the screen too. Elsewhere
+ * `--kb` stays at its `0px` default and every `calc()` reading it is inert.
+ *
+ * Two of them can be mounted at once — a camera opened from a chat — which is harmless:
+ * both write the same measurement from the same events. The one that unmounts first
+ * clears the properties, and the other restores them on the next viewport change, which
+ * a keyboard closing always is.
  */
 
 /** Below this, it is browser chrome moving, not a keyboard. */

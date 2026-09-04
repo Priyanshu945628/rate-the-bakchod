@@ -45,7 +45,7 @@ import {
   filterCss,
   renderPhoto,
   supportsFilters,
-} from "./photo-filters";
+} from "../photo-filters";
 
 /**
  * One open conversation.
@@ -65,6 +65,11 @@ import {
  * This is also the one surface in the app that gets gradients — see the `chat-*`
  * block at the bottom of `app/globals.css` for why, and for the promise that it
  * stops here.
+ *
+ * `chat-full` on the section below is not a look, it is a claim: *a thread is open*.
+ * Below `lg` that hides the site's top bar and tab bar and drops the page's gutters,
+ * so a conversation on a phone is the whole screen and the header's back arrow is the
+ * only way out of it.
  */
 
 /** How long a "typing…" stays up without another ping. */
@@ -298,7 +303,7 @@ export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId:
   }
 
   return (
-    <section className="panel chat-glow flex min-w-0 flex-1 flex-col overflow-hidden">
+    <section className="chat-full panel chat-glow flex min-w-0 flex-1 flex-col overflow-hidden">
       <Header
         conversationId={id}
         counterpart={counterpart}

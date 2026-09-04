@@ -369,6 +369,54 @@ html[data-keyboard="open"] .kb-flush {
 }
 
 /* ---------------------------------------------------------------
+   One open thread, full screen, on a phone.
+
+   A conversation on a phone is not a pane inside the app — it is the
+   app for as long as you are in it, which is how every messenger
+   behaves. The thread draws its own header with a back arrow, so the
+   site's top bar and tab bar are two rows of chrome offering a way
+   out that is already on the screen.
+
+   `:has()` rather than a route check in JavaScript. Only
+   `/messages/[id]` renders `.chat-full`, so its presence *is* the
+   route — and it arrives in the server's HTML, so the chrome is
+   already gone in the first paint instead of vanishing a moment later
+   when something that read `usePathname()` hydrates. The root layout
+   is a server component and cannot see the route at all.
+
+   All of it is inside the query. Above `lg` the inbox and the thread
+   sit side by side under the same chrome as every other page.
+   --------------------------------------------------------------- */
+@media (width < 64rem) {
+  html:has(.chat-full) .app-chrome {
+    display: none;
+  }
+
+  /* The 12px frame around the app, and the room `<main>` keeps for the
+     tab bar. Both go with the bars they were spacing. */
+  html:has(.chat-full) .app-frame,
+  html:has(.chat-full) .app-main {
+    padding: 0;
+  }
+
+  /* Last of the `.chat-surface` cases deliberately: this and the
+     `data-keyboard` rule above have the same specificity, so the later
+     one wins, and with no frame left there is nothing to subtract from
+     the viewport but the keyboard. */
+  html:has(.chat-full) .chat-surface {
+    height: calc(100dvh - var(--kb));
+  }
+
+  /* A rounded, bordered card only reads as one with something around
+     it. Against the four edges of the screen it is a stray hairline and
+     two clipped corners. */
+  .chat-full {
+    border-width: 0;
+    border-radius: 0;
+  }
+}
+
+/* ---------------------------------------------------------------
    Typing dots.
 
    Three dots that fade in turn — the second way the app says someone
