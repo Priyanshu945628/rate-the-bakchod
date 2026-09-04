@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { authorizeWrite, handleRouteError, jsonError, readJsonBody } from "@/lib/api";
-import { deleteOwnPost, editPostCaption } from "@/lib/posts";
+import { deleteOwnPost, editPost, type PostEdit } from "@/lib/posts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +13,11 @@ export const dynamic = "force-dynamic";
  * an hour: right for encrypting and archiving a video, wrong for fixing a typo.
  */
 
-/** Rewrite the caption. `{ caption }`, where `null` or `""` clears it. */
+/**
+ * Rewrite the words. `{ caption?, tweetText? }`, where a key that is absent is left
+ * alone and `null` or `""` clears it — so the editor can save either field on its
+ * own, and "clear the caption" stays tellable from "only change the tweet text".
+ */
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -23,13 +27,27 @@ export async function PATCH(
 
   try {
     const { id } = await params;
-    const body = (await readJsonBody(request)) as { caption?: unknown };
-    if (body.caption !== null && typeof body.caption !== "string") {
-      return jsonError("`caption` must be a string or null.", 400);
+    const body = ((await readJsonBody(request)) ?? {}) as {
+      caption?: unknown;
+      tweetText?: unknown;
+    };
+
+    const edit: PostEdit = {};
+    if ("caption" in body) {
+      if (body.caption !== null && typeof body.caption !== "string") {
+        return jsonError("`caption` must be a string or null.", 400);
+      }
+      edit.caption = body.caption;
+    }
+    if ("tweetText" in body) {
+      if (body.tweetText !== null && typeof body.tweetText !== "string") {
+        return jsonError("`tweetText` must be a string or null.", 400);
+      }
+      edit.tweetText = body.tweetText;
     }
 
-    const caption = await editPostCaption(auth.user, id, body.caption);
-    return NextResponse.json({ caption }, { headers: { "cache-control": "no-store" } });
+    const updated = await editPost(auth.user, id, edit);
+    return NextResponse.json(updated, { headers: { "cache-control": "no-store" } });
   } catch (err) {
     return handleRouteError(err);
   }

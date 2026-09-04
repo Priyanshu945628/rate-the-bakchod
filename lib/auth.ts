@@ -58,16 +58,20 @@ async function allocateHandle(seed: string): Promise<string> {
 }
 
 /**
- * `User` plus the one theme field that decides which picture is theirs.
+ * `User` plus the two theme fields that follow them onto every page.
  *
  * A superset of `User`, so everything that already takes a plain `User` keeps
  * accepting this. It is carried on the current user because the top bar draws
- * their avatar on every page, and a second query for one nullable string would be
- * a query on every page.
+ * their avatar on every page and a post card has to know which post is their pinned
+ * one — two nullable strings, fetched with the row rather than by two more queries.
  */
-export type CurrentUser = User & { theme: { logoKey: string | null } | null };
+export type CurrentUser = User & {
+  theme: { logoKey: string | null; pinnedPostId: string | null } | null;
+};
 
-const withTheme = { theme: { select: { logoKey: true } } } as const;
+const withTheme = {
+  theme: { select: { logoKey: true, pinnedPostId: true } },
+} as const;
 
 /**
  * The signed-in user, or null. Cached per request so a page that checks auth in

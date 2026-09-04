@@ -68,6 +68,15 @@ export interface ClientViewer {
   displayName: string;
   avatarUrl: string | null;
   isAdmin: boolean;
+  /**
+   * Which of their own posts they have pinned to their profile, if any.
+   *
+   * On the viewer rather than on the post because it is a fact about them, and
+   * because a card holds its own copy of the post: a prop is the only channel that
+   * still reaches every card after a pin moves, so the card that lost the pin
+   * relabels itself along with the one that gained it.
+   */
+  pinnedPostId: string | null;
 }
 
 export type VisibilityName = "PUBLIC" | "SIGNED_IN";

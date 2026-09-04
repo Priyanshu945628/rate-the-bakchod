@@ -100,6 +100,8 @@ export const limits = {
   maxAudioDurationMs: 300_000,
   maxImageEdge: 1600, // px, longest side after normalisation
   captionMaxLength: 500,
+  /** Pasted tweet text on a TWEET post — the composer's limit and the editor's. */
+  tweetMaxLength: 600,
   commentMaxLength: 600,
   /** Disk cache ceiling; least-recently-used entries are evicted past this. */
   cacheMaxBytes: 2 * 1024 * 1024 * 1024, // 2 GB

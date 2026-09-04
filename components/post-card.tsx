@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { ClientPost, ClientViewer } from "@/lib/types";
 import { limits } from "@/lib/config";
 import { ActionMenu, type MenuAction } from "./action-menu";
@@ -11,6 +12,7 @@ import {
   FlagIcon,
   LinkIcon,
   PencilIcon,
+  PinIcon,
   SparkIcon,
   SpinnerIcon,
   TrashIcon,
@@ -26,6 +28,10 @@ import { TimeAgo } from "./time-ago";
  * Holds its own copy of the post so a rating, a comment or an edited caption
  * updates in place without refetching the page around it. The feed only ever
  * appends, so this copy never goes stale underneath us.
+ *
+ * The author's own card carries the whole management set in its ⋯ menu — edit, pin,
+ * copy link, delete — rather than only on the profile. A post is managed from
+ * wherever you came across it, which for your own posts is usually the feed.
  *
  * A post a moderator deleted renders as a tombstone instead — see `Tombstone`.
  * That branch is only ever reached on the author's own profile, or in the hands of
@@ -68,10 +74,23 @@ export function PostCard({
   const [note, setNote] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [tweetDraft, setTweetDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const [pinning, setPinning] = useState(false);
   const [gone, setGone] = useState(false);
+  const router = useRouter();
 
   const mine = viewer !== null && viewer.id === post.author.id;
+  /**
+   * Derived, never held in state. The pin lives on the viewer prop, so a refresh
+   * relabels every card at once; a local copy would leave two cards both claiming
+   * to be the pinned one.
+   */
+  const pinned = mine && viewer.pinnedPostId === post.id;
+  /** A tweet post's quoted words are editable too. Nothing else has any. */
+  const canEditTweet = post.kind === "TWEET" && post.tweetText !== null;
+  /** With no media, the words are the whole post and cannot be emptied. */
+  const needsTweet = canEditTweet && !post.mediaUrl && tweetDraft.trim().length === 0;
 
   async function sendReport() {
     const reason = reportReason.trim();
@@ -141,19 +160,28 @@ export function PostCard({
     }
   }
 
-  /** Save an edited caption. An empty draft clears it rather than failing. */
-  async function saveCaption() {
-    const next = draft.trim();
+  /**
+   * Save the words. An empty caption clears it rather than failing; an empty tweet
+   * box is refused by the server on a post that has nothing else in it, which is why
+   * Save is disabled for that case rather than left to fail.
+   */
+  async function saveEdits() {
+    const body: { caption: string | null; tweetText?: string } = {
+      caption: draft.trim() || null,
+    };
+    if (canEditTweet) body.tweetText = tweetDraft.trim();
+
     setSaving(true);
     setNote(null);
     try {
       const res = await fetch(`/api/posts/${encodeURIComponent(post.id)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ caption: next || null }),
+        body: JSON.stringify(body),
       });
       const data = (await res.json().catch(() => ({}))) as {
         caption?: string | null;
+        tweetText?: string | null;
         error?: string;
       };
       if (!res.ok) {
@@ -162,12 +190,45 @@ export function PostCard({
       }
       // The server's own answer, not the draft: it trims and it may have rejected
       // trailing whitespace differently than this did.
-      setPost((p) => ({ ...p, caption: data.caption ?? null }));
+      setPost((p) => ({
+        ...p,
+        caption: data.caption ?? null,
+        tweetText: data.tweetText ?? null,
+      }));
       setEditing(false);
     } catch {
       setNote("Could not save.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  /**
+   * Pin this to the top of your profile, or take it down. There is one slot, so
+   * pinning this post is also what unpins whatever was in it.
+   */
+  async function togglePin() {
+    setPinning(true);
+    setNote(null);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pinnedPostId: pinned ? null : post.id }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        setNote(data.error ?? "Could not change the pin.");
+        return;
+      }
+      // The pin comes down from the server as a prop, so asking for the page again is
+      // what moves it — here, on the card that just lost it, and in the pinned block
+      // at the top of the profile, all from one answer.
+      router.refresh();
+    } catch {
+      setNote("Could not change the pin.");
+    } finally {
+      setPinning(false);
     }
   }
 
@@ -182,12 +243,18 @@ export function PostCard({
   const actions: MenuAction[] = [];
   if (mine) {
     actions.push({
-      label: "Edit caption",
+      label: "Edit",
       icon: PencilIcon,
       run: () => {
         setDraft(post.caption ?? "");
+        setTweetDraft(post.tweetText ?? "");
         setEditing(true);
       },
+    });
+    actions.push({
+      label: pinned ? "Unpin from profile" : "Pin to profile",
+      icon: PinIcon,
+      run: () => void togglePin(),
     });
   }
   actions.push({ label: "Copy link", icon: LinkIcon, run: () => void copyLink() });
@@ -212,25 +279,39 @@ export function PostCard({
     <article className="panel overflow-hidden shadow-card">
       <AuthorHeader
         post={post}
-        trailing={<ActionMenu label="Post options" actions={actions} />}
+        pinned={pinned}
+        trailing={
+          <ActionMenu label="Post options" actions={actions} disabled={pinning} />
+        }
       />
 
       {editing ? (
         <div className="px-4 pb-3">
-          <textarea
+          <EditField
+            id={`caption-${post.id}`}
+            label="Caption"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            maxLength={limits.captionMaxLength}
+            onChange={setDraft}
+            max={limits.captionMaxLength}
             rows={3}
-            aria-label="Caption"
-            className="focus-bare w-full resize-none rounded-ctl border border-line-strong bg-panel-2 px-3 py-2 text-[15px] leading-relaxed text-ink placeholder:text-faint"
             placeholder="Say what happened."
           />
+          {canEditTweet && (
+            <EditField
+              id={`tweet-${post.id}`}
+              label="Tweet text"
+              value={tweetDraft}
+              onChange={setTweetDraft}
+              max={limits.tweetMaxLength}
+              rows={4}
+              placeholder="What the tweet said."
+            />
+          )}
           <div className="mt-2 flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void saveCaption()}
-              disabled={saving}
+              onClick={() => void saveEdits()}
+              disabled={saving || needsTweet}
               className="flex h-9 items-center gap-2 rounded-ctl bg-accent px-4 text-sm font-semibold text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {saving && <SpinnerIcon className="h-4 w-4 animate-spin" />}
@@ -243,9 +324,6 @@ export function PostCard({
             >
               Cancel
             </button>
-            <span className="ml-auto text-[11px] tabular-nums text-faint">
-              {limits.captionMaxLength - draft.length}
-            </span>
           </div>
         </div>
       ) : (
@@ -384,12 +462,70 @@ export function PostCard({
 }
 
 /**
+ * One field of the edit form: its label, the box, and how much of the limit is left.
+ *
+ * Labelled visibly rather than by `aria-label` alone, because a tweet post's edit
+ * form is two stacked boxes and which one is the caption is not something the shape
+ * of a textarea can tell anybody.
+ */
+function EditField({
+  id,
+  label,
+  value,
+  onChange,
+  max,
+  rows,
+  placeholder,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  max: number;
+  rows: number;
+  placeholder: string;
+}) {
+  return (
+    <div className="mt-3 first:mt-0">
+      <div className="flex items-baseline justify-between gap-2">
+        <label htmlFor={id} className="text-[11px] font-medium text-muted">
+          {label}
+        </label>
+        <span className="text-[11px] tabular-nums text-faint">{max - value.length}</span>
+      </div>
+      <textarea
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        maxLength={max}
+        rows={rows}
+        placeholder={placeholder}
+        className="focus-bare mt-1 w-full resize-none rounded-ctl border border-line-strong bg-panel-2 px-3 py-2 text-[15px] leading-relaxed text-ink placeholder:text-faint"
+      />
+    </div>
+  );
+}
+
+/**
  * Who posted it and when, plus whatever the card wants on the right.
  *
  * Shared with the tombstone, which keeps this and drops the rest — and passes no
  * `trailing`, because there is nothing left to act on.
  */
-function AuthorHeader({ post, trailing }: { post: ClientPost; trailing?: ReactNode }) {
+function AuthorHeader({
+  post,
+  pinned = false,
+  trailing,
+}: {
+  post: ClientPost;
+  /**
+   * Marked as the author's pinned post. Only ever true for the author looking at
+   * their own — the pin travels on the viewer, so a visitor has no way to know, and
+   * the profile's pinned block is where it is public.
+   */
+  pinned?: boolean;
+  trailing?: ReactNode;
+}) {
   const profileHref = `/u/${encodeURIComponent(post.author.handle)}`;
 
   return (
@@ -430,6 +566,15 @@ function AuthorHeader({ post, trailing }: { post: ClientPost; trailing?: ReactNo
           </Link>
           <span aria-hidden>·</span>
           <TimeAgo iso={post.createdAt} />
+          {pinned && (
+            <>
+              <span aria-hidden>·</span>
+              <span className="flex shrink-0 items-center gap-1 text-muted">
+                <PinIcon className="h-3 w-3" />
+                Pinned
+              </span>
+            </>
+          )}
         </div>
       </div>
       {trailing}

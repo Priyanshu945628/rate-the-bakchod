@@ -74,6 +74,18 @@ function cleanCaption(raw: string | null | undefined): string | null {
   return trimmed;
 }
 
+/** The pasted words of a TWEET post, held to the same limit on create and on edit. */
+function cleanTweetText(raw: string | null | undefined): string | null {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return null;
+  if (trimmed.length > limits.tweetMaxLength) {
+    throw new PostServiceError(
+      `Tweet text is too long (max ${limits.tweetMaxLength} characters).`,
+    );
+  }
+  return trimmed;
+}
+
 export interface CreatePostInput {
   author: User;
   caption?: string | null;
@@ -91,14 +103,11 @@ export interface CreatePostInput {
 
 export async function createPost(input: CreatePostInput) {
   const caption = cleanCaption(input.caption);
-  const tweetText = (input.tweetText ?? "").trim();
+  const tweetText = cleanTweetText(input.tweetText);
   const isStory = input.story === true;
 
   if (!input.file && !tweetText) {
     throw new PostServiceError("Add a file or some tweet text.");
-  }
-  if (tweetText.length > 600) {
-    throw new PostServiceError("Tweet text is too long (max 600 characters).");
   }
   // A text-only story would be a tweet nobody can rate that vanishes in a day.
   // The DB's story/expiry CHECK constraint would accept it; the product should not.
@@ -119,7 +128,7 @@ export async function createPost(input: CreatePostInput) {
       },
     });
     void notifyMentions({
-      text: `${caption ?? ""} ${tweetText}`,
+      text: `${caption ?? ""} ${tweetText ?? ""}`,
       actorId: input.author.id,
       postId: post.id,
     });
@@ -155,7 +164,7 @@ export async function createPost(input: CreatePostInput) {
       authorId: input.author.id,
       kind: tweetText ? "TWEET" : kind,
       caption,
-      tweetText: tweetText || null,
+      tweetText,
       archiveState: "PENDING",
       isStory,
       storyExpiresAt: isStory ? storyExpiresAt(new Date()) : null,
@@ -171,7 +180,7 @@ export async function createPost(input: CreatePostInput) {
   // would notify someone about something that expires before they look.
   if (!isStory) {
     void notifyMentions({
-      text: `${caption ?? ""} ${tweetText}`,
+      text: `${caption ?? ""} ${tweetText ?? ""}`,
       actorId: input.author.id,
       postId: post.id,
     });
@@ -395,38 +404,89 @@ export async function reportPost(reporter: User, postId: string, reason: string)
  * the same 404 — there is no reply that confirms a post exists but is not yours.
  * `FEED_SCOPE` adds the rest: a story is `deleteStory`'s business, and an
  * already-deleted post has nothing left to change.
+ *
+ * The row rather than the id, because what an author may change depends on what the
+ * post is: `storageKey` is null on a text-only post, which is the one post whose
+ * words cannot be taken away without leaving an empty card behind.
  */
-async function ownPost(author: User, postId: string): Promise<string> {
+async function ownPost(
+  author: User,
+  postId: string,
+): Promise<{ id: string; kind: PostKind; storageKey: string | null }> {
   const post = await prisma.post.findFirst({
     where: { id: postId, authorId: author.id, modDeletedAt: null, ...FEED_SCOPE },
-    select: { id: true },
+    select: { id: true, kind: true, storageKey: true },
   });
   if (!post) throw new PostServiceError("That is not your post.", 404);
-  return post.id;
+  return post;
+}
+
+export interface PostEdit {
+  caption?: string | null;
+  /** Only on a TWEET post — the quoted words. */
+  tweetText?: string | null;
 }
 
 /**
- * Rewrite your own caption.
+ * Rewrite your own words.
  *
- * The caption is the only part of a post its author can revise, and that is not a
+ * The words are the only part of a post its author can revise, and that is not a
  * missing feature. The media is encrypted, hashed against duplicates and already
  * archived, so replacing it would be a different post; the score underneath it is
- * other people's opinion of what they actually saw. What is left is the words the
- * author chose, held to the same limit they were held to the first time.
+ * other people's opinion of what they actually saw. What is left is the caption and,
+ * on a tweet post, the text that was pasted in — both held to the limits they were
+ * held to the first time.
+ *
+ * An absent key means "leave it alone", so the editor can save one field without
+ * clearing the other.
+ *
+ * Mentions are deliberately not re-scanned. `createPost` notifies whoever a post
+ * names, once; doing it again per edit would make an edit box a way to ring the same
+ * bell as often as you like.
  */
-export async function editPostCaption(
+export async function editPost(
   author: User,
   postId: string,
-  raw: unknown,
-): Promise<string | null> {
-  if (raw !== null && raw !== undefined && typeof raw !== "string") {
-    throw new PostServiceError("Caption has to be text.");
-  }
-  const caption = cleanCaption(raw as string | null | undefined);
+  edit: PostEdit,
+): Promise<{ caption: string | null; tweetText: string | null }> {
+  const data: { caption?: string | null; tweetText?: string | null } = {};
 
-  const id = await ownPost(author, postId);
-  await prisma.post.update({ where: { id }, data: { caption } });
-  return caption;
+  if ("caption" in edit) {
+    if (edit.caption !== null && typeof edit.caption !== "string") {
+      throw new PostServiceError("Caption has to be text.");
+    }
+    data.caption = cleanCaption(edit.caption);
+  }
+
+  const post = await ownPost(author, postId);
+
+  if ("tweetText" in edit) {
+    if (edit.tweetText !== null && typeof edit.tweetText !== "string") {
+      throw new PostServiceError("Tweet text has to be text.");
+    }
+    // Adding tweet text to a post that is not one would change what the card *is* —
+    // `createPost` is what decides that, from whether text was pasted at all.
+    if (post.kind !== "TWEET") {
+      throw new PostServiceError("That post has no tweet text.");
+    }
+    const text = cleanTweetText(edit.tweetText);
+    if (!text && !post.storageKey) {
+      throw new PostServiceError("A text post needs its text.");
+    }
+    data.tweetText = text;
+  }
+
+  if (Object.keys(data).length === 0) {
+    throw new PostServiceError("Nothing to change.");
+  }
+
+  // The row's own values back, not the draft: whatever was trimmed or left alone is
+  // what the card should now be showing.
+  return prisma.post.update({
+    where: { id: post.id },
+    data,
+    select: { caption: true, tweetText: true },
+  });
 }
 
 /**
@@ -443,7 +503,7 @@ export async function editPostCaption(
  * score you could raise by deleting your worst post would not be a score.
  */
 export async function deleteOwnPost(author: User, postId: string): Promise<void> {
-  const id = await ownPost(author, postId);
+  const { id } = await ownPost(author, postId);
 
   await prisma.$transaction([
     prisma.post.update({
@@ -1037,7 +1097,21 @@ export function toClientComment(comment: {
   };
 }
 
-export function toClientViewer(user: (User & AvatarSource) | null): ClientViewer | null {
+/**
+ * What `toClientViewer` needs. Spelled out rather than `User & AvatarSource`,
+ * because the pin lives on the same `theme` relation the avatar is resolved from and
+ * intersecting two different shapes of one optional property is a type nobody can
+ * read a field off.
+ */
+export interface ViewerSource extends AvatarSource {
+  id: string;
+  handle: string;
+  displayName: string;
+  isAdmin: boolean;
+  theme?: { logoKey: string | null; pinnedPostId?: string | null } | null;
+}
+
+export function toClientViewer(user: ViewerSource | null): ClientViewer | null {
   if (!user) return null;
   return {
     id: user.id,
@@ -1045,6 +1119,7 @@ export function toClientViewer(user: (User & AvatarSource) | null): ClientViewer
     displayName: user.displayName,
     avatarUrl: resolveAvatarUrl(user),
     isAdmin: user.isAdmin,
+    pinnedPostId: user.theme?.pinnedPostId ?? null,
   };
 }
 
