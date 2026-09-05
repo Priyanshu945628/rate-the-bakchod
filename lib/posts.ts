@@ -99,12 +99,21 @@ export interface CreatePostInput {
    * the profile's post count.
    */
   story?: boolean;
+  /**
+   * Mark this as a platform announcement: badged on the card, and not rateable.
+   *
+   * Never taken from a request body as-is — `POST /api/posts` only forwards it for
+   * an admin. See `Post.isOfficial`.
+   */
+  official?: boolean;
 }
 
 export async function createPost(input: CreatePostInput) {
   const caption = cleanCaption(input.caption);
   const tweetText = cleanTweetText(input.tweetText);
   const isStory = input.story === true;
+  // An announcement that vanishes in a day is not an announcement.
+  const isOfficial = input.official === true && !isStory;
 
   if (!input.file && !tweetText) {
     throw new PostServiceError("Add a file or some tweet text.");
@@ -123,6 +132,7 @@ export async function createPost(input: CreatePostInput) {
         kind: "TWEET",
         caption,
         tweetText,
+        isOfficial,
         // Nothing to upload, so it is trivially "archived".
         archiveState: "VERIFIED",
       },
@@ -165,6 +175,7 @@ export async function createPost(input: CreatePostInput) {
       kind: tweetText ? "TWEET" : kind,
       caption,
       tweetText,
+      isOfficial,
       archiveState: "PENDING",
       isStory,
       storyExpiresAt: isStory ? storyExpiresAt(new Date()) : null,
@@ -204,6 +215,7 @@ export async function submitRating(rater: User, postId: string, value: number) {
         authorId: true,
         isHidden: true,
         isStory: true,
+        isOfficial: true,
         createdAt: true,
         ratingsSum: true,
         ratingsCount: true,
@@ -222,6 +234,11 @@ export async function submitRating(rater: User, postId: string, value: number) {
     if (post.author.isAI) {
       // The AI is never scored. This is the rule, enforced at the door.
       throw new PostServiceError("The AI bakchod is above your judgement.", 400);
+    }
+    if (post.isOfficial) {
+      // A platform update is not evidence of bakchodi, so it carries no score. The
+      // card draws no rater either; this is the half that a hand-built request hits.
+      throw new PostServiceError("Platform updates are not rated.", 400);
     }
     if (post.authorId === rater.id) {
       throw new PostServiceError("You cannot rate your own bakchodi.", 400);
@@ -551,6 +568,7 @@ const feedSelect = {
   archiveState: true,
   ratingsSum: true,
   ratingsCount: true,
+  isOfficial: true,
   createdAt: true,
   // Carried so a tombstone can render as one. Every query except the author's own
   // profile excludes these rows anyway, so on the feed this is always null.
@@ -968,6 +986,23 @@ export async function fetchPinnedPost(
 }
 
 /**
+ * Every platform announcement, newest first. Backs `/updates` and the admin panel.
+ *
+ * No cursor and no viewer rating: these are written by hand a few times a year, and
+ * none of them is rateable. `take` is a ceiling rather than a page — when there are
+ * ever more than a hundred of these, the page can grow a cursor.
+ */
+export async function fetchOfficialPosts(): Promise<FeedPost[]> {
+  const posts = await prisma.post.findMany({
+    where: { isOfficial: true, ...FEED_SCOPE },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    select: feedSelect,
+  });
+  return posts.map((post) => ({ ...post, viewerRating: null }));
+}
+
+/**
  * One post with its thread. Backs both `/api/comments` and the `/p/[id]` permalink.
  *
  * `isHidden` and `isStory` are selected explicitly because `feedSelect` does not
@@ -1054,6 +1089,7 @@ export function toClientPost(post: FeedPost): ClientPost {
     ratingsCount: post.ratingsCount,
     average: post.ratingsCount > 0 ? post.ratingsSum / post.ratingsCount : null,
     commentsCount: post._count.comments,
+    isOfficial: post.isOfficial,
     createdAt: post.createdAt.toISOString(),
     author: {
       id: post.author.id,

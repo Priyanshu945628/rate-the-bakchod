@@ -23,6 +23,16 @@ export function MediaView({ post }: { post: ClientPost }) {
     post.width && post.height ? `${post.width} / ${post.height}` : undefined;
 
   if (post.kind === "TWEET" && !post.mediaUrl) {
+    // An announcement is the platform talking, not somebody being quoted, so the
+    // quote marks come off and the line breaks stay in — a changelog written as
+    // three lines should arrive as three lines.
+    if (post.isOfficial) {
+      return (
+        <p className="mx-4 mb-4 rounded-ctl border border-line bg-panel-2 px-4 py-4 text-[15px] leading-relaxed break-words whitespace-pre-wrap text-ink">
+          {post.tweetText}
+        </p>
+      );
+    }
     return (
       <blockquote className="mx-4 mb-4 rounded-ctl border border-line bg-panel-2 px-4 py-4 text-[15px] leading-relaxed text-ink">
         <span className="mr-1 select-none text-faint">“</span>

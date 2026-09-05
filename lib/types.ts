@@ -37,6 +37,8 @@ export interface ClientPost {
   ratingsCount: number;
   average: number | null;
   commentsCount: number;
+  /** A platform announcement: badged, and carries no rating. */
+  isOfficial: boolean;
   createdAt: string;
   author: ClientAuthor;
   /** What the signed-in viewer already rated this, if anything. */

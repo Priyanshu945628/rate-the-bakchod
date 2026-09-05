@@ -70,6 +70,12 @@ export function RatePanel({ post, viewer, onRated }: Props) {
     </div>
   );
 
+  if (post.isOfficial) {
+    // No panel at all. The header badge already says what this is, and a strip
+    // reading "not rated" under every announcement is a row of nothing.
+    return null;
+  }
+
   if (post.author.isAI) {
     return (
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3">

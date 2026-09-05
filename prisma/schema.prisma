@@ -475,6 +475,21 @@ model Post {
   isHidden  Boolean   @default(false)
   hiddenAt  DateTime?
 
+  /// An announcement from the platform rather than a piece of bakchodi.
+  ///
+  /// Only an admin can set it — `POST /api/posts` ignores the field for everyone
+  /// else. It buys two things: a badge on the card, and immunity from rating, on
+  /// the same footing as the AI's posts. A platform update carrying a 6.4/10 would
+  /// read as the platform being scored, which is not what the number means.
+  ///
+  /// Official posts stay in the ordinary feed, ordered by the ordinary clock. They
+  /// are also collected on their own page, which is what `[isOfficial, createdAt]`
+  /// is for.
+  ///
+  /// Never a story — an announcement that vanishes in a day is not an announcement.
+  /// Enforced in `createPost` and by a CHECK constraint in migration SQL.
+  isOfficial Boolean @default(false)
+
   /// Set when a moderator deleted the post rather than merely hiding it.
   ///
   /// Always accompanied by `isHidden = true`, which is what keeps it out of every
@@ -514,6 +529,8 @@ model Post {
   @@index([highlightId])
   /// The owner's own profile asks for "my posts, plus my tombstones".
   @@index([authorId, modDeletedAt])
+  /// The updates page: official posts, newest first.
+  @@index([isOfficial, createdAt(sort: Desc)])
 }
 
 model Rating {
@@ -569,6 +586,54 @@ model GlobalStats {
   id         Int @id @default(1)
   totalSum   Int @default(0)
   totalCount Int @default(0)
+}
+
+/// Singleton (id = 1) holding everything about the AI bakchod that an admin can
+/// change without a deploy — its cadence and its credentials.
+///
+/// No row means "use the defaults": every column's `@default` matches `BOT_DEFAULTS`
+/// in `lib/ai/bot-config.ts`, and the credential columns fall back to the
+/// environment. Moving a default here means moving it there too.
+///
+/// The API key is sealed the way media is: a random data key encrypts the value and
+/// the master key wraps the data key (`lib/crypto.ts`), so the column is useless to
+/// anyone holding a database dump without `MEDIA_MASTER_KEY`. Nulling the three wrap
+/// columns is a shred, exactly as it is on `Post`.
+///
+/// Nothing ever reads a credential back out to a browser. `/api/admin/bot` reports
+/// only which of the three is configured and where it came from — never a value, not
+/// even masked, because a mask still confirms a length.
+model BotSetting {
+  id Int @id @default(1)
+
+  /// Master switch. Off and the tick returns without doing anything.
+  enabled Boolean @default(true)
+
+  /// How old a post must be before the bot may comment on it.
+  commentDelayMinutes Int @default(4)
+  /// Comments per tick, across all posts. 0 stops comments without stopping posts.
+  maxCommentsPerTick Int @default(3)
+  /// How long between the bot's own posts.
+  postIntervalMinutes Int @default(360)
+  /// What share of its own posts are rendered cards rather than text, 0-100.
+  cardPercent Int @default(40)
+
+  /// The sealed API key. Null on any of the six columns means: use the environment.
+  secretCipher Bytes?
+  secretIv     Bytes?
+  secretTag    Bytes?
+  /// The wrapped data key, named as on `Post` because it is the same envelope.
+  wrappedKey Bytes?
+  keyIv      Bytes?
+  keyTag     Bytes?
+
+  /// Overrides for `ANTHROPIC_BASE_URL` and `BAKCHOD_MODEL`. Not secret, but not
+  /// shown in the panel either — the same write-only treatment as the key, so there
+  /// is one rule about that page rather than two.
+  baseUrl String?
+  model   String?
+
+  updatedAt DateTime @updatedAt
 }
 
 model RateLimit {

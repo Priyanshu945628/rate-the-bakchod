@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { fetchReportRows } from "@/lib/moderation";
@@ -22,7 +23,21 @@ export default async function AdminPage() {
   return (
     <div className="mx-auto w-full max-w-[820px] space-y-4">
       <header className="px-1">
-        <h1 className="text-xl font-bold tracking-tight text-ink">Moderation</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-xl font-bold tracking-tight text-ink">Moderation</h1>
+          <Link
+            href="/admin/updates"
+            className="text-sm text-muted transition-colors hover:text-ink"
+          >
+            Updates
+          </Link>
+          <Link
+            href="/admin/bot"
+            className="text-sm text-muted transition-colors hover:text-ink"
+          >
+            Bot
+          </Link>
+        </div>
         <p className="mt-1 text-sm text-muted">
           {reports.length === 0
             ? "No open reports."

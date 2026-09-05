@@ -14,8 +14,18 @@ const MAX_BYTES = 100 * 1024 * 1024;
  * The upload returns as soon as the file is encrypted and cached — the archive
  * push happens behind it — so `router.refresh()` right after is enough to show
  * the new post at the top of the feed.
+ *
+ * `official` is the admin panel's copy of this. It sends one extra field and the
+ * route ignores that field for everyone who is not an admin, so this prop is a
+ * label rather than a permission.
  */
-export function Composer({ viewer }: { viewer: ClientViewer | null }) {
+export function Composer({
+  viewer,
+  official = false,
+}: {
+  viewer: ClientViewer | null;
+  official?: boolean;
+}) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -68,8 +78,16 @@ export function Composer({ viewer }: { viewer: ClientViewer | null }) {
   }
 
   async function submit() {
-    if (!file && tweetText.trim().length === 0) {
-      setError("Attach something, or paste a tweet.");
+    const text = caption.trim();
+    // An announcement is one field. A post with no file has to carry its words in
+    // `tweetText` — that is what the API accepts as a bodied post with no upload —
+    // so the same text goes to whichever field this post shape has room for.
+    const fields = official
+      ? { caption: file ? text : "", tweetText: file ? "" : text }
+      : { caption: text, tweetText: tweetText.trim() };
+
+    if (!file && !fields.tweetText) {
+      setError(official ? "Write the update first." : "Attach something, or paste a tweet.");
       return;
     }
     setBusy(true);
@@ -78,8 +96,9 @@ export function Composer({ viewer }: { viewer: ClientViewer | null }) {
     try {
       const form = new FormData();
       if (file) form.set("file", file);
-      if (caption.trim()) form.set("caption", caption.trim());
-      if (tweetText.trim()) form.set("tweetText", tweetText.trim());
+      if (fields.caption) form.set("caption", fields.caption);
+      if (fields.tweetText) form.set("tweetText", fields.tweetText);
+      if (official) form.set("official", "1");
 
       const res = await fetch("/api/posts", { method: "POST", body: form });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -105,13 +124,15 @@ export function Composer({ viewer }: { viewer: ClientViewer | null }) {
       <textarea
         value={caption}
         onChange={(e) => setCaption(e.target.value)}
-        rows={2}
+        rows={official ? 4 : 2}
+        // 500 either way: with a file attached these words become the caption, and
+        // that is the shorter of the two server-side caps.
         maxLength={500}
-        placeholder="What did this bakchod do?"
+        placeholder={official ? "What changed." : "What did this bakchod do?"}
         className="w-full resize-y rounded-ctl border border-line bg-panel-2 px-3 py-2.5 text-[15px] text-ink placeholder:text-faint"
       />
 
-      {showTweet && (
+      {showTweet && !official && (
         <textarea
           value={tweetText}
           onChange={(e) => setTweetText(e.target.value)}
@@ -170,13 +191,15 @@ export function Composer({ viewer }: { viewer: ClientViewer | null }) {
           Image / video / audio
         </label>
 
-        <button
-          type="button"
-          onClick={() => setShowTweet((v) => !v)}
-          className="h-9 rounded-ctl border border-line px-3 text-xs font-medium text-muted transition-colors hover:border-line-strong hover:text-ink"
-        >
-          {showTweet ? "Drop tweet text" : "Paste a tweet"}
-        </button>
+        {!official && (
+          <button
+            type="button"
+            onClick={() => setShowTweet((v) => !v)}
+            className="h-9 rounded-ctl border border-line px-3 text-xs font-medium text-muted transition-colors hover:border-line-strong hover:text-ink"
+          >
+            {showTweet ? "Drop tweet text" : "Paste a tweet"}
+          </button>
+        )}
 
         <button
           type="button"
@@ -185,7 +208,7 @@ export function Composer({ viewer }: { viewer: ClientViewer | null }) {
           className="ml-auto flex h-9 items-center gap-2 rounded-ctl bg-accent px-5 text-sm font-semibold text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-60"
         >
           {busy && <SpinnerIcon className="h-4 w-4 animate-spin" />}
-          {busy ? "Processing…" : "Post"}
+          {busy ? "Processing…" : official ? "Publish" : "Post"}
         </button>
       </div>
 

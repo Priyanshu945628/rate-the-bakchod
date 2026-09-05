@@ -16,15 +16,25 @@ import "server-only";
  * Tone rails live in the system prompt. This is a roast bot pointed at photos of
  * real people, so the boundary between teasing the *post* and attacking the
  * *person* has to be stated explicitly, not assumed.
+ *
+ * Rule 2 is why there are two request shapes rather than one — see `askForLine`.
+ * Falling back to a canned line is the right answer to a rate limit and the wrong
+ * answer to a gateway that does not speak beta, because the second one never clears
+ * up on its own.
+ *
+ * Nothing in here decides how often any of it happens. Cadence and credentials both
+ * come from `./settings`, so an admin can retune the bot or repoint it at a different
+ * gateway without a deploy.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import { serverEnv } from "../config";
 import { prisma } from "../prisma";
 import { readMedia, type MediaRow } from "../media/store";
 import { addComment, createPost } from "../posts";
+import { CARD_LAYOUTS, renderBakchodCard, type CardLayout } from "./card";
+import { loadBotSettings, type BotSettings } from "./settings";
 
 export const AI_HANDLE = "bakchod_ai";
 
@@ -66,6 +76,21 @@ const PostSchema = z.object({
     .string()
     .describe(
       "A short original bakchod observation or fake-confession, Hinglish, under 240 characters.",
+    ),
+});
+
+/**
+ * The line that gets set on a card.
+ *
+ * Tighter than a text post because this one is printed at 76px inside a 1080px
+ * square — `sizeFor` will shrink it to fit, but a line that needs shrinking is a
+ * line that wanted to be a paragraph.
+ */
+const CardSchema = z.object({
+  line: z
+    .string()
+    .describe(
+      "One punchy Hinglish line, under 110 characters, to be printed large on a plain card. No surrounding quotes, no hashtags, no emoji.",
     ),
 });
 
@@ -114,17 +139,38 @@ function pick<T>(pool: readonly T[]): T {
 // ---------------------------------------------------------------------------
 
 let client: Anthropic | null = null;
+/** The credentials `client` was built from, so a change can be noticed. */
+let clientFingerprint = "";
 
-function getClient(): Anthropic | null {
-  const apiKey = serverEnv.anthropicKey;
+/**
+ * Whether this endpoint has already said it does not understand the rich request.
+ *
+ * Latched until the credentials change, so the wasted first call is paid once rather
+ * than before every line the bot writes.
+ */
+let plainShape = false;
+
+/**
+ * The SDK client for these settings, or null when there is no key anywhere.
+ *
+ * Keyed on the credentials rather than memoised for the life of the process, because
+ * the admin panel can change them underneath a running container: a key saved from a
+ * phone has to take effect on the next tick, not on the next deploy.
+ */
+function getClient(settings: BotSettings): Anthropic | null {
+  const { apiKey, baseUrl } = settings;
   if (!apiKey) return null; // No key configured — canned lines only.
-  // An unset base URL is safe to pass: the SDK takes it as a destructuring default,
-  // so `undefined` still falls through to api.anthropic.com rather than clearing it.
-  client ??= new Anthropic({
-    apiKey,
-    baseURL: serverEnv.anthropicBaseUrl,
-    maxRetries: 2,
-  });
+
+  const fingerprint = `${apiKey}\n${baseUrl ?? ""}`;
+  if (!client || fingerprint !== clientFingerprint) {
+    // An unset base URL is safe to pass: the SDK takes it as a destructuring default,
+    // so `undefined` still falls through to api.anthropic.com rather than clearing it.
+    client = new Anthropic({ apiKey, baseURL: baseUrl, maxRetries: 2 });
+    clientFingerprint = fingerprint;
+    // The latch is a fact about one endpoint, not about the bot. A new base URL has
+    // earned a fresh chance at the shape the old one refused.
+    plainShape = false;
+  }
   return client;
 }
 
@@ -162,6 +208,100 @@ function isRecoverable(err: unknown): boolean {
   );
 }
 
+/**
+ * True for the answer a bare `/v1/messages` proxy gives to the parameters above.
+ *
+ * `ANTHROPIC_BASE_URL` usually points at a gateway that forwards one endpoint and
+ * knows nothing about betas, adaptive thinking, structured outputs or prompt
+ * caching, so it rejects the whole request over a field it has never heard of. That
+ * is not a reason to fall back to canned lines — the same prompt sent the plain way
+ * would have worked — so it gets a retry rather than a shrug.
+ */
+function unsupportedShape(err: unknown): boolean {
+  if (!(err instanceof Anthropic.APIError)) return false;
+  return err.status === 400 || err.status === 404 || err.status === 422;
+}
+
+/** Trim, cap, and treat an empty reply as no reply. */
+function oneLine(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text.length > 0 ? text.slice(0, 600) : null;
+}
+
+/**
+ * Ask for one line, in whichever request shape this endpoint accepts.
+ *
+ * First choice is the rich one: server-side fallbacks so a tripped classifier still
+ * answers, adaptive thinking, a cached persona, and a schema so the reply arrives
+ * needing no cleanup. When the endpoint refuses that shape the same prompt goes out
+ * as an ordinary `messages.create` and the text is read back by hand. Worse — but
+ * the alternative is a bot that has been quietly reciting canned Hinglish since the
+ * day a gateway was configured, with a healthy-looking log to match.
+ *
+ * `null` means no usable line: a refusal, or an empty reply. Callers turn that into
+ * a canned line. A thrown error is theirs to catch.
+ */
+async function askForLine<S extends z.ZodType>(
+  anthropic: Anthropic,
+  model: string,
+  schema: S,
+  field: string,
+  content: Anthropic.Beta.Messages.BetaContentBlockParam[],
+): Promise<string | null> {
+  if (!plainShape) {
+    try {
+      const message = await anthropic.beta.messages.parse({
+        ...REQUEST_BASE,
+        model,
+        system: systemBlocks(),
+        output_config: {
+          effort: OUTPUT_EFFORT,
+          format: zodOutputFormat(schema),
+        },
+        messages: [{ role: "user", content }],
+      });
+
+      // A refusal is a normal outcome for this workload, not an exception.
+      if (message.stop_reason === "refusal") return null;
+      return oneLine((message.parsed_output as Record<string, unknown> | null)?.[field]);
+    } catch (err) {
+      if (!unsupportedShape(err)) throw err;
+      plainShape = true;
+      console.warn(
+        "[bakchod-ai] endpoint refused the rich request shape; sending plain messages from here on:",
+        err,
+      );
+    }
+  }
+
+  const message = await anthropic.messages.create({
+    model,
+    max_tokens: REQUEST_BASE.max_tokens,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: [
+          // Only text and image blocks are ever built for this, and those two are
+          // shaped identically in both unions — the beta one is just the wider pair.
+          ...(content as Anthropic.ContentBlockParam[]),
+          // The schema carried this instruction on the rich path.
+          { type: "text", text: "Reply with the line itself. No JSON, no quotes, no preamble." },
+        ],
+      },
+    ],
+  });
+
+  if (message.stop_reason === "refusal") return null;
+  return oneLine(
+    message.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map((block) => block.text)
+      .join(" "),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Generation
 // ---------------------------------------------------------------------------
@@ -185,8 +325,11 @@ function describePost(ctx: PostContext): string {
   return lines.join("\n");
 }
 
-export async function generateComment(ctx: PostContext): Promise<string> {
-  const anthropic = getClient();
+export async function generateComment(
+  settings: BotSettings,
+  ctx: PostContext,
+): Promise<string> {
+  const anthropic = getClient(settings);
   if (!anthropic) return pick(CANNED_COMMENTS);
 
   const content: Anthropic.Beta.Messages.BetaContentBlockParam[] = [];
@@ -206,22 +349,10 @@ export async function generateComment(ctx: PostContext): Promise<string> {
   });
 
   try {
-    const message = await anthropic.beta.messages.parse({
-      ...REQUEST_BASE,
-      model: serverEnv.bakchodModel,
-      system: systemBlocks(),
-      output_config: {
-        effort: OUTPUT_EFFORT,
-        format: zodOutputFormat(CommentSchema),
-      },
-      messages: [{ role: "user", content }],
-    });
-
-    // A refusal is a normal outcome for this workload, not an exception.
-    if (message.stop_reason === "refusal") return pick(CANNED_COMMENTS);
-
-    const text = message.parsed_output?.comment?.trim();
-    return text && text.length > 0 ? text.slice(0, 600) : pick(CANNED_COMMENTS);
+    return (
+      (await askForLine(anthropic, settings.model, CommentSchema, "comment", content)) ??
+      pick(CANNED_COMMENTS)
+    );
   } catch (err) {
     if (isRecoverable(err)) {
       console.warn("[bakchod-ai] comment generation failed, using canned line:", err);
@@ -231,8 +362,11 @@ export async function generateComment(ctx: PostContext): Promise<string> {
   }
 }
 
-export async function generatePostText(recentCaptions: string[]): Promise<string> {
-  const anthropic = getClient();
+export async function generatePostText(
+  settings: BotSettings,
+  recentCaptions: string[],
+): Promise<string> {
+  const anthropic = getClient(settings);
   if (!anthropic) return pick(CANNED_POSTS);
 
   const context =
@@ -243,32 +377,79 @@ export async function generatePostText(recentCaptions: string[]): Promise<string
       : "The feed is quiet right now.";
 
   try {
-    const message = await anthropic.beta.messages.parse({
-      ...REQUEST_BASE,
-      model: serverEnv.bakchodModel,
-      system: systemBlocks(),
-      output_config: {
-        effort: OUTPUT_EFFORT,
-        format: zodOutputFormat(PostSchema),
+    const line = await askForLine(anthropic, settings.model, PostSchema, "tweetText", [
+      {
+        type: "text",
+        text: `Write your own post for the feed — an observation, a fake confession, or a challenge to the other bakchods. Original, not a reply.\n\n${context}`,
       },
-      messages: [
-        {
-          role: "user",
-          content: `Write your own post for the feed — an observation, a fake confession, or a challenge to the other bakchods. Original, not a reply.\n\n${context}`,
-        },
-      ],
-    });
-
-    if (message.stop_reason === "refusal") return pick(CANNED_POSTS);
-
-    const text = message.parsed_output?.tweetText?.trim();
-    return text && text.length > 0 ? text.slice(0, 600) : pick(CANNED_POSTS);
+    ]);
+    return line ?? pick(CANNED_POSTS);
   } catch (err) {
     if (isRecoverable(err)) {
       console.warn("[bakchod-ai] post generation failed, using canned line:", err);
       return pick(CANNED_POSTS);
     }
     throw err;
+  }
+}
+
+/** What each layout is asking for, in one clause. The look is in `./card`. */
+const CARD_BRIEF: Record<CardLayout, string> = {
+  certificate: "an award citation for a bakchod who has thoroughly earned it",
+  notice: "a mock public notice, the way a housing society pins one to the lift",
+  confession: "a confession the whole feed will recognise itself in",
+};
+
+/**
+ * The line for a picture post, or null to skip the picture.
+ *
+ * Deliberately no canned fallback. Rule 2 is about the bot never going silent, and
+ * the caller keeps that promise by posting text instead — whereas six canned lines
+ * cycling through a designed plaque would be six recognisable pictures forever.
+ */
+async function generateCardLine(
+  settings: BotSettings,
+  layout: CardLayout,
+): Promise<string | null> {
+  const anthropic = getClient(settings);
+  if (!anthropic) return null;
+
+  try {
+    return await askForLine(anthropic, settings.model, CardSchema, "line", [
+      {
+        type: "text",
+        text: `Write ${CARD_BRIEF[layout]}. It will be printed large on a plain card, so it has to land on its own with no post around it — no reply, no context, no "as I was saying".`,
+      },
+    ]);
+  } catch (err) {
+    if (isRecoverable(err)) {
+      console.warn("[bakchod-ai] card line failed, posting text instead:", err);
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Try for a picture post: the model writes the line, the server sets it.
+ *
+ * Null whenever anything ordinary goes wrong — no key, a refusal, or a container
+ * with no font installed ({@link renderBakchodCard} answers null for that) — and the
+ * caller falls back to a text post, so a missing font costs pictures rather than the
+ * whole slot.
+ */
+async function renderOwnCard(
+  settings: BotSettings,
+): Promise<{ png: Buffer; line: string } | null> {
+  const layout = pick(CARD_LAYOUTS);
+  try {
+    const line = await generateCardLine(settings, layout);
+    if (!line) return null;
+    const png = await renderBakchodCard(layout, line);
+    return png ? { png, line } : null;
+  } catch (err) {
+    console.warn("[bakchod-ai] card render failed, posting text instead:", err);
+    return null;
   }
 }
 
@@ -326,12 +507,6 @@ export async function ensureAIUser() {
 // The tick
 // ---------------------------------------------------------------------------
 
-const MAX_COMMENTS_PER_TICK = 3;
-/** Give humans first crack at a new post before the bot barges in. */
-const COMMENT_DELAY_MS = 4 * 60_000;
-/** How often the bot posts something of its own. */
-const POST_INTERVAL_MS = 6 * 3_600_000;
-
 /** Load the cached derivative for the vision path; null if unavailable. */
 async function loadImageFor(
   post: MediaRow & { kind: string; mimeType: string | null },
@@ -359,50 +534,64 @@ async function loadImageFor(
 export interface TickResult {
   commented: number;
   posted: boolean;
+  /** True when the bot is switched off, so a caller can say so rather than "0". */
+  skipped: boolean;
 }
 
 /**
  * One pass of bot activity. Idempotent enough to be safe on a tight cron: it
  * only ever comments on posts it has not already commented on.
+ *
+ * Every number in here comes from the settings row, read once per tick. That is why
+ * it is read per tick rather than cached: a cadence changed in the admin panel applies
+ * to the next tick, with nothing to restart.
  */
 export async function runBakchodTick(): Promise<TickResult> {
-  const bot = await ensureAIUser();
-  const cutoff = new Date(Date.now() - COMMENT_DELAY_MS);
+  const settings = await loadBotSettings();
+  if (!settings.enabled) return { commented: 0, posted: false, skipped: true };
 
-  const targets = await prisma.post.findMany({
-    where: {
-      isHidden: false,
-      createdAt: { lt: cutoff },
-      author: { isAI: false }, // The bot does not reply to itself.
-      comments: { none: { authorId: bot.id } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: MAX_COMMENTS_PER_TICK,
-    select: {
-      id: true,
-      kind: true,
-      caption: true,
-      tweetText: true,
-      mimeType: true,
-      storageKey: true,
-      archiveItem: true,
-      archiveFile: true,
-      wrappedKey: true,
-      keyIv: true,
-      keyTag: true,
-      contentIv: true,
-      contentTag: true,
-      posterKey: true,
-      posterIv: true,
-      posterTag: true,
-      author: { select: { displayName: true } },
-    },
-  });
+  const bot = await ensureAIUser();
+  const cutoff = new Date(Date.now() - settings.commentDelayMinutes * 60_000);
+
+  // Zero is the documented way to stop commenting without stopping posts, and
+  // `take: 0` would be a round trip that can only come back empty.
+  const targets =
+    settings.maxCommentsPerTick === 0
+      ? []
+      : await prisma.post.findMany({
+          where: {
+            isHidden: false,
+            createdAt: { lt: cutoff },
+            author: { isAI: false }, // The bot does not reply to itself.
+            comments: { none: { authorId: bot.id } },
+          },
+          orderBy: { createdAt: "desc" },
+          take: settings.maxCommentsPerTick,
+          select: {
+            id: true,
+            kind: true,
+            caption: true,
+            tweetText: true,
+            mimeType: true,
+            storageKey: true,
+            archiveItem: true,
+            archiveFile: true,
+            wrappedKey: true,
+            keyIv: true,
+            keyTag: true,
+            contentIv: true,
+            contentTag: true,
+            posterKey: true,
+            posterIv: true,
+            posterTag: true,
+            author: { select: { displayName: true } },
+          },
+        });
 
   let commented = 0;
   for (const post of targets) {
     try {
-      const comment = await generateComment({
+      const comment = await generateComment(settings, {
         kind: post.kind,
         caption: post.caption,
         tweetText: post.tweetText,
@@ -427,27 +616,44 @@ export async function runBakchodTick(): Promise<TickResult> {
 
   const due =
     !lastOwnPost ||
-    Date.now() - lastOwnPost.createdAt.getTime() > POST_INTERVAL_MS;
+    Date.now() - lastOwnPost.createdAt.getTime() >
+      settings.postIntervalMinutes * 60_000;
 
   if (due) {
     try {
-      const recent = await prisma.post.findMany({
-        where: { isHidden: false, author: { isAI: false } },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-        select: { caption: true, tweetText: true },
-      });
-      const captions = recent
-        .map((r) => r.caption ?? r.tweetText)
-        .filter((c): c is string => Boolean(c));
+      // Decided before the feed context is fetched, because a card does not use it:
+      // a plaque has to land on its own, so priming it with what the feed said last
+      // is both pointless and a query.
+      const wantCard = Math.random() * 100 < settings.cardPercent;
+      const card = wantCard ? await renderOwnCard(settings) : null;
 
-      const text = await generatePostText(captions);
-      await createPost({ author: bot, tweetText: text });
+      if (card) {
+        // The caption repeats the line deliberately. The card is a picture of a
+        // sentence, and the sentence has to exist as text as well — it is the image's
+        // alt text, the notification preview, and the whole post for anyone whose
+        // image never loads.
+        await createPost({ author: bot, file: card.png, caption: card.line });
+      } else {
+        const recent = await prisma.post.findMany({
+          where: { isHidden: false, author: { isAI: false } },
+          orderBy: { createdAt: "desc" },
+          take: 5,
+          select: { caption: true, tweetText: true },
+        });
+        const captions = recent
+          .map((r) => r.caption ?? r.tweetText)
+          .filter((c): c is string => Boolean(c));
+
+        await createPost({
+          author: bot,
+          tweetText: await generatePostText(settings, captions),
+        });
+      }
       posted = true;
     } catch (err) {
       console.error("[bakchod-ai] failed to create its own post:", err);
     }
   }
 
-  return { commented, posted };
+  return { commented, posted, skipped: false };
 }

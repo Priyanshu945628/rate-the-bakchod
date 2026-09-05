@@ -16,6 +16,7 @@ import {
   SparkIcon,
   SpinnerIcon,
   TrashIcon,
+  VerifiedIcon,
 } from "./icons";
 import { CommentThread } from "./comment-thread";
 import { MediaView } from "./media-view";
@@ -549,7 +550,17 @@ function AuthorHeader({
           >
             {post.author.displayName}
           </Link>
-          {post.author.isAI ? (
+          {post.isOfficial ? (
+            // Ahead of the AI and score badges on purpose: a bakchod score beside a
+            // platform announcement is the wrong number in the wrong place.
+            <Link
+              href="/updates"
+              className="flex items-center gap-1 rounded-pill border border-line-strong bg-panel-3 px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase text-ink transition-colors hover:border-ink/30"
+            >
+              <VerifiedIcon className="h-3 w-3" />
+              Official
+            </Link>
+          ) : post.author.isAI ? (
             <span className="flex items-center gap-1 rounded-pill border border-line-strong bg-panel-3 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink">
               <SparkIcon className="h-3 w-3" />
               AI

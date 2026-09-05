@@ -75,6 +75,11 @@ export async function POST(request: Request) {
       caption: typeof caption === "string" ? caption : null,
       tweetText: typeof tweetText === "string" ? tweetText : null,
       file: buffer,
+      // Silently ignored for everyone else rather than refused: this field is not
+      // in the ordinary composer, so a request carrying it is one somebody built by
+      // hand, and the answer to that is a normal post, not a hint about what the
+      // flag does.
+      official: form.get("official") === "1" && auth.user.isAdmin,
     });
 
     return NextResponse.json({ id: post.id }, { status: 201 });
