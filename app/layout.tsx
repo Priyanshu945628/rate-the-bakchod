@@ -99,7 +99,8 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
           content.
         */}
         {/* The provider wraps everything: the bell is in the top bar, the unread
-            dot is in the rail, and a call can arrive on any page. */}
+            dot is in the rail — or beside the bell on a phone — and a call can
+            arrive on any page. */}
         <RealtimeProvider enabled={viewer !== null}>
           {/* Inside the stream, because an invitation arrives on it — and outside the
               layout, because a call has to survive navigating away from the thread it
@@ -115,7 +116,11 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
                 unreadConversations={unreadConversations}
               />
               <div className="min-w-0 flex-1">
-                <TopBar viewer={viewer} unread={unread} />
+                <TopBar
+                  viewer={viewer}
+                  unread={unread}
+                  unreadConversations={unreadConversations}
+                />
                 {/* `pb-28` reserves the floating tab bar's height on phones.
                     `kb-flush` gives it back while the keyboard is up, because the
                     tab bar has hidden itself by then and the space would otherwise

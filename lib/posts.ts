@@ -693,6 +693,53 @@ async function attachViewerRatings(
   return rows.map((p) => ({ ...p, viewerRating: byPost.get(p.id) ?? null }));
 }
 
+/**
+ * Posts whose caption or tweet text contains `query`, newest first.
+ *
+ * The Fresh tab with one more clause in its `where`, deliberately: same scope, same
+ * ordering, same id cursor, so a result opens, rates and pages exactly like the feed
+ * row it is. Nothing is ranked — every hit is a substring match, so the only signal
+ * left to sort by is recency, which is the order the reader is already in.
+ *
+ * `mode: "insensitive"` is the whole matcher. No `tsvector`: these captions are
+ * Hinglish, and every dictionary Postgres ships would treat `bakchodi` and `bakchod`
+ * as two unrelated words — so full-text search would cost an index and a column to
+ * match *less* than `ILIKE` does. The index that makes this fast is a trigram one,
+ * which needs no opinion about the language.
+ *
+ * Not scoped by the author's profile visibility, exactly like `fetchFeed`: a post is
+ * public or it is not in the table.
+ */
+export async function searchPosts(options: {
+  query: string;
+  cursor?: string | null;
+  viewerId?: string | null;
+}): Promise<FeedPage> {
+  const { query, cursor, viewerId } = options;
+
+  const rows = await prisma.post.findMany({
+    where: {
+      ...FEED_SCOPE,
+      OR: [
+        { caption: { contains: query, mode: "insensitive" } },
+        { tweetText: { contains: query, mode: "insensitive" } },
+      ],
+    },
+    select: feedSelect,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: FEED_PAGE_SIZE + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
+
+  const hasMore = rows.length > FEED_PAGE_SIZE;
+  const page = hasMore ? rows.slice(0, FEED_PAGE_SIZE) : rows;
+
+  return {
+    posts: await attachViewerRatings(page, viewerId ?? null),
+    nextCursor: hasMore ? page[page.length - 1].id : null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // For You
 // ---------------------------------------------------------------------------

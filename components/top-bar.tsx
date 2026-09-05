@@ -3,6 +3,7 @@ import type { ClientViewer } from "@/lib/types";
 import { AuthButton } from "./auth-button";
 import { BrandMark } from "./brand-mark";
 import { CameraButton } from "./camera/camera-launcher";
+import { InboxButton } from "./inbox-button";
 import { InstallApp } from "./install-app";
 import { NotificationBell } from "./notification-bell";
 
@@ -11,16 +12,22 @@ import { NotificationBell } from "./notification-bell";
  * becomes a bottom tab bar on phones and drops its tile — without this, the app
  * would have no logo at all on a phone.
  *
+ * The inbox is the other thing that only appears at phone widths: the bottom bar has no
+ * room for it once Search is in there, and the desktop rail has a row of its own for it.
+ *
  * `app-chrome` is what an open thread hides on a phone; the rule is in
  * `app/globals.css`.
  */
 export function TopBar({
   viewer,
   unread = 0,
+  unreadConversations = 0,
 }: {
   viewer: ClientViewer | null;
   /** Unread notifications, server-rendered so the badge is right on first paint. */
   unread?: number;
+  /** Unread conversations, for the phone-width inbox button. Same reason. */
+  unreadConversations?: number;
 }) {
   return (
     <header className="app-chrome glass-bar sticky top-3 z-20 flex h-14 items-center justify-between gap-4 rounded-card px-4">
@@ -46,6 +53,9 @@ export function TopBar({
             go to need a session, and a camera that ends in a 401 is worse than no
             camera. */}
         {viewer && <CameraButton variant="bar" />}
+        {/* Phone widths only — `lg:hidden` lives on the button, opposite the rail row
+            that takes over above it. */}
+        {viewer && <InboxButton initialUnread={unreadConversations} />}
         {/* Only for signed-in visitors: there is nothing to notify a stranger about,
             and the stream it listens on requires a session. */}
         {viewer && <NotificationBell initialUnread={unread} />}

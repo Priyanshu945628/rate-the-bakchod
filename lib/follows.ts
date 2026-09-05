@@ -305,6 +305,71 @@ export async function fetchFollowList(
 }
 
 /**
+ * People whose handle or display name contains `query`.
+ *
+ * Not filtered by profile visibility, and that is a decision rather than an omission.
+ * A `SIGNED_IN` profile still appears on the public leaderboard, and opening one while
+ * signed out still renders its name and handle above the locked card — the setting
+ * gates decoration, stories, comments and two stats, never who exists. A search that
+ * hid them would be the only surface in the app pretending otherwise, and it would hide
+ * them from the one person trying to find them by name.
+ *
+ * Which two dozen rows are on a page is the database's decision, ordered by followers so
+ * the cursor stays stable under paging; the order *within* them is this function's, and
+ * puts an exact match first, then a prefix, then the rest. The two only disagree once a
+ * single term matches more than a page of people — at which point an exact match landing
+ * second is not the interesting problem.
+ */
+export async function searchPeople(
+  query: string,
+  viewerId: string | null,
+  cursor?: string | null,
+): Promise<ClientPeoplePage> {
+  const rows = await prisma.user.findMany({
+    where: {
+      OR: [
+        { handle: { contains: query, mode: "insensitive" } },
+        { displayName: { contains: query, mode: "insensitive" } },
+      ],
+    },
+    orderBy: [{ followersCount: "desc" }, { id: "asc" }],
+    take: PEOPLE_PAGE_SIZE + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    select: personSelect,
+  });
+
+  const hasMore = rows.length > PEOPLE_PAGE_SIZE;
+  const page = hasMore ? rows.slice(0, PEOPLE_PAGE_SIZE) : rows;
+  // Read off the database's order, before the ranking below reshuffles the page —
+  // handing back the ranked last id would page from the wrong place.
+  const nextCursor = hasMore ? page[page.length - 1].id : null;
+
+  const followed = await followedAmong(viewerId, page.map((r) => r.id));
+  const term = query.toLowerCase();
+
+  return {
+    people: page
+      // Stable, so two rows at the same rank keep the follower order they arrived in.
+      .sort((a, b) => matchRank(a, term) - matchRank(b, term))
+      .map((row) =>
+        toClientPerson(row, {
+          isFollowing: !viewerId || viewerId === row.id ? null : followed.has(row.id),
+        }),
+      ),
+    nextCursor,
+  };
+}
+
+/** How well one person matches: 0 is the name itself, 1 starts with it, 2 contains it. */
+function matchRank(row: PersonRow, term: string): number {
+  const handle = row.handle.toLowerCase();
+  const name = row.displayName.toLowerCase();
+  if (handle === term || name === term) return 0;
+  if (handle.startsWith(term) || name.startsWith(term)) return 1;
+  return 2;
+}
+
+/**
  * People worth following, best first.
  *
  * Two passes, cheapest signal first:
