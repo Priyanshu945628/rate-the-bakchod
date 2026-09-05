@@ -518,6 +518,10 @@ export async function editPost(
  * and `ratingsCount` are accumulated as ratings arrive and are never walked back.
  * That is deliberate twice over: those people really did rate what they saw, and a
  * score you could raise by deleting your worst post would not be a score.
+ *
+ * What the profile *counts* is a different question, and the answer there is the
+ * opposite one — see {@link PROFILE_STAT_COUNTS}. A held score is a judgement the
+ * crowd made; a comment on a hidden post is just a row nobody can reach.
  */
 export async function deleteOwnPost(author: User, postId: string): Promise<void> {
   const { id } = await ownPost(author, postId);
@@ -1164,6 +1168,23 @@ export function toClientViewer(user: ViewerSource | null): ClientViewer | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * The three profile stats that are counts, scoped the way the page is.
+ *
+ * Deleting your own post is a hide, not a DELETE (see {@link deleteOwnPost}), so the
+ * comments and ratings hanging off it are still rows. Counted raw they pad numbers
+ * sitting directly beside `POSTS`, which does filter — a profile reading "0 posts,
+ * 1 comment" is pointing the visitor at something they cannot open.
+ *
+ * `RATINGS` and the score are deliberately absent: those are `User.ratingsSum` and
+ * `ratingsCount`, which are ratings *received* and are held past a delete on purpose.
+ */
+export const PROFILE_STAT_COUNTS = {
+  posts: { where: FEED_SCOPE },
+  comments: { where: { post: FEED_SCOPE } },
+  ratings: { where: { post: FEED_SCOPE } },
+} satisfies Prisma.UserCountOutputTypeSelect;
+
+/**
  * One person, by handle. `cache`d because Next calls `generateMetadata` and the
  * page component separately and both need the same row — this way that is one
  * query per request rather than two.
@@ -1205,14 +1226,7 @@ export const fetchProfile = cache(async (handle: string) => {
         },
       },
       _count: {
-        select: {
-          // Hidden posts have been moderated away and stories are not feed posts;
-          // neither should pad a count the visitor cannot reconcile against what
-          // the page actually shows.
-          posts: { where: FEED_SCOPE },
-          comments: true,
-          ratings: true,
-        },
+        select: PROFILE_STAT_COUNTS,
       },
     },
   });
