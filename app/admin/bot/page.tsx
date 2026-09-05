@@ -3,7 +3,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { readBotStatus } from "@/lib/ai/settings";
+import { listEndpointStatus } from "@/lib/ai/endpoints";
 import { BotSettings } from "@/components/bot-settings";
+import { BotEndpoints } from "@/components/bot-endpoints";
 
 export const metadata: Metadata = {
   title: "Bot · Rate the Bakchod",
@@ -20,15 +22,16 @@ export const dynamic = "force-dynamic";
  * takes effect on the next tick rather than the next deploy — the point being that a
  * gateway which has started refusing requests is something to fix from a phone.
  *
- * {@link readBotStatus} is the only reader involved, and it returns no credential
- * values at all: which of the three is configured and where it came from, nothing
- * more. Same reasoning as `/admin`: a non-admin goes straight home.
+ * Both readers here are value-free by design. {@link readBotStatus} says which of the
+ * three credentials is configured and where it came from; {@link listEndpointStatus}
+ * says what each fallback is called and whether it is answering. Neither returns a key,
+ * a base URL or a model id. Same reasoning as `/admin`: a non-admin goes straight home.
  */
 export default async function AdminBotPage() {
   const user = await getCurrentUser();
   if (!user?.isAdmin) redirect("/");
 
-  const status = await readBotStatus();
+  const [status, endpoints] = await Promise.all([readBotStatus(), listEndpointStatus()]);
 
   return (
     <div className="mx-auto w-full max-w-[820px] space-y-4">
@@ -49,6 +52,9 @@ export default async function AdminBotPage() {
       </header>
 
       <BotSettings initial={status} />
+      {/* Below the save bar on purpose: every button in here is its own request, so a
+          Save floating over them would suggest they were waiting on it. */}
+      <BotEndpoints initial={endpoints} />
     </div>
   );
 }

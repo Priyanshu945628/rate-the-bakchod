@@ -57,34 +57,111 @@ export type BotTuning = z.infer<typeof BotTuningSchema>;
 const credential = (max: number) => z.string().trim().max(max).optional();
 
 /**
+ * The three credential fields, named so both the single `BotSetting` and a
+ * `BotEndpoint` row are validated by the same rules. A value typed into either half of
+ * the panel deserves the same catch as one pasted into Railway, which is why these are
+ * the refinements `scripts/check-env.mjs` applies to the environment.
+ */
+const API_KEY = credential(400).refine(
+  (value) => value === undefined || value === "" || !/\s/.test(value),
+  "That key has whitespace in it — check the paste.",
+);
+
+const BASE_URL = credential(300)
+  .refine(
+    (value) => value === undefined || value === "" || /^https?:\/\//i.test(value),
+    "Base URL has to start with http:// or https://.",
+  )
+  .refine(
+    (value) => value === undefined || value === "" || !/\/v1\/?$/.test(value),
+    "Drop the /v1 — the SDK adds it, so this would ask for /v1/v1/messages.",
+  );
+
+const MODEL = credential(120).refine(
+  (value) => value === undefined || value === "" || /^[A-Za-z0-9._:-]+$/.test(value),
+  "A model id is letters, digits, dots, colons, dashes and underscores.",
+);
+
+/**
  * Credential edits, three-way per field: absent leaves it as it is, an empty string
  * clears it back to the environment variable, anything else replaces it.
- *
- * The refinements are the same ones `scripts/check-env.mjs` applies to the
- * environment, because a value typed into the panel deserves the same catch as one
- * pasted into Railway.
  */
 export const BotCredentialsSchema = z.object({
-  apiKey: credential(400).refine(
-    (value) => value === undefined || value === "" || !/\s/.test(value),
-    "That key has whitespace in it — check the paste.",
-  ),
-  baseUrl: credential(300)
-    .refine(
-      (value) => value === undefined || value === "" || /^https?:\/\//i.test(value),
-      "Base URL has to start with http:// or https://.",
-    )
-    .refine(
-      (value) => value === undefined || value === "" || !/\/v1\/?$/.test(value),
-      "Drop the /v1 — the SDK adds it, so this would ask for /v1/v1/messages.",
-    ),
-  model: credential(120).refine(
-    (value) => value === undefined || value === "" || /^[A-Za-z0-9._:-]+$/.test(value),
-    "A model id is letters, digits, dots, colons, dashes and underscores.",
-  ),
+  apiKey: API_KEY,
+  baseUrl: BASE_URL,
+  model: MODEL,
 });
 
 export type BotCredentials = z.infer<typeof BotCredentialsSchema>;
+
+/**
+ * A fallback endpoint's name, which is the only thing about it the panel ever renders.
+ *
+ * Short on purpose: it sits in a row of pills, and its whole job is to be recognisable
+ * to whoever typed it — "tabitoken", "spare key" — not to describe the gateway.
+ */
+const LABEL = z.string().trim().min(1, "Give it a name.").max(40);
+
+/**
+ * A new endpoint.
+ *
+ * The key is required, unlike everywhere else: a row with no key is skipped by the
+ * failover chain, so creating one would be adding a name to a list and nothing else.
+ * Base URL and model are optional — two keys on the same gateway is a real fallback,
+ * for when the first one hits its quota.
+ */
+export const EndpointCreateSchema = z.object({
+  label: LABEL,
+  apiKey: z.string().trim().min(1, "A fallback needs its own key.").max(400).refine(
+    (value) => !/\s/.test(value),
+    "That key has whitespace in it — check the paste.",
+  ),
+  baseUrl: BASE_URL,
+  model: MODEL,
+});
+
+export type EndpointCreate = z.infer<typeof EndpointCreateSchema>;
+
+/**
+ * An edit to an existing endpoint: what it is called, and whether it is in the chain.
+ *
+ * Deliberately not its key, base URL or model. Nothing here can show which value is
+ * being replaced — that is the entire point of this panel — so a box for one would
+ * either wipe a working credential by being left empty or lie about what is already in
+ * it. Delete the row and add it again: one press more, and no ambiguity.
+ */
+export const EndpointPatchSchema = z.object({
+  label: LABEL.optional(),
+  enabled: z.boolean().optional(),
+});
+
+export type EndpointPatch = z.infer<typeof EndpointPatchSchema>;
+
+/** Reordering is a separate body, because it is a swap and not a field. */
+export const EndpointMoveSchema = z.object({ move: z.enum(["up", "down"]) });
+
+/**
+ * One endpoint, as the admin panel is allowed to see it.
+ *
+ * Booleans where the values are, on the same rule as {@link CredentialSource}: whether
+ * a key is stored, not the key; whether a base URL is set, not which host. The health
+ * fields are shaped to keep that promise too — `lastStatus` is a number and `lastError`
+ * is an error's *class name*, because an SDK error's message can quote the request URL.
+ */
+export interface EndpointStatus {
+  id: string;
+  label: string;
+  enabled: boolean;
+  hasKey: boolean;
+  hasBaseUrl: boolean;
+  hasModel: boolean;
+  lastOkAt: string | null;
+  lastFailAt: string | null;
+  lastStatus: number | null;
+  lastError: string | null;
+  /** Consecutive failures, reset by the next success. */
+  failures: number;
+}
 
 /**
  * Where a credential is coming from. This is the most the admin panel is ever told
@@ -99,6 +176,12 @@ export interface BotStatus extends BotTuning {
   model: CredentialSource;
   /** Null until something has been saved from the panel. */
   updatedAt: string | null;
+  /**
+   * When the background heartbeat last claimed a tick. Null means it never has —
+   * which, on a host with nothing scheduling `/api/cron/bakchod`, is the difference
+   * between a bot that posts on its own and one that waits for the button.
+   */
+  lastTickAt: string | null;
   /**
    * Whether this container can draw text at all. False means cards silently become
    * text posts, which is otherwise invisible from the outside.

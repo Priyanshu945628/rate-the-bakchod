@@ -216,11 +216,9 @@ export function BotSettings({ initial }: { initial: BotStatus }) {
               <span className="text-danger">{problem}</span>
             ) : note ? (
               <span className={note.ok ? "text-muted" : "text-danger"}>{note.text}</span>
-            ) : status.updatedAt ? (
-              <span className="text-faint">
-                Saved <TimeAgo iso={status.updatedAt} />
-              </span>
-            ) : null}
+            ) : (
+              <Stamps status={status} />
+            )}
           </p>
         </div>
       </div>
@@ -273,6 +271,38 @@ function Pill({ children }: { children: React.ReactNode }) {
   return (
     <span className="ml-auto rounded-pill bg-panel-3 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
       {children}
+    </span>
+  );
+}
+
+/**
+ * The two timestamps this page is allowed to show.
+ *
+ * `Never ticked` is the one that earns its place. Every credential here is write-only,
+ * so "did the bot run on its own" cannot be answered by looking at the fields — and a
+ * host with nothing scheduling the cron route is exactly the state where that reads
+ * never and the only posts are the ones a button produced. It is also why this is a
+ * timestamp and not a status line: a time cannot carry a key, a URL or a model id.
+ *
+ * A heartbeat stamp lands while nobody is watching, so this follows a page load rather
+ * than updating live. "Run tick now" deliberately does not stamp it — the button forces
+ * a pass without claiming one, so what shows here stays the automatic cadence.
+ */
+function Stamps({ status }: { status: BotStatus }) {
+  return (
+    <span className="text-faint">
+      {status.updatedAt && (
+        <>
+          Saved <TimeAgo iso={status.updatedAt} /> ·{" "}
+        </>
+      )}
+      {status.lastTickAt ? (
+        <>
+          Ticked <TimeAgo iso={status.lastTickAt} />
+        </>
+      ) : (
+        "Never ticked"
+      )}
     </span>
   );
 }

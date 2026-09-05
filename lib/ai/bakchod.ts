@@ -20,15 +20,17 @@ import "server-only";
  * Rule 2 is why there are two request shapes rather than one — see `askForLine`.
  * Falling back to a canned line is the right answer to a rate limit and the wrong
  * answer to a gateway that does not speak beta, because the second one never clears
- * up on its own.
+ * up on its own. It is also why there is a *list* of gateways rather than one: an
+ * expired key used to be the whole bot, and now it is one entry that gets skipped.
  *
  * Nothing in here decides how often any of it happens. Cadence and credentials both
- * come from `./settings`, so an admin can retune the bot or repoint it at a different
- * gateway without a deploy.
+ * come from `./settings`, so an admin can retune the bot, add another gateway or reorder
+ * them without a deploy.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "../prisma";
 // The bot's account — handle, profile copy, picture — lives beside the platform's
@@ -38,7 +40,8 @@ import { ensureAIUser } from "../house-accounts";
 import { readMedia, type MediaRow } from "../media/store";
 import { addComment, createPost } from "../posts";
 import { CARD_LAYOUTS, renderBakchodCard, type CardLayout } from "./card";
-import { loadBotSettings, type BotSettings } from "./settings";
+import { recordEndpointFailure, recordEndpointOk } from "./endpoints";
+import { loadBotSettings, type BotCandidate, type BotSettings } from "./settings";
 
 // ---------------------------------------------------------------------------
 // Persona
@@ -137,43 +140,60 @@ function pick<T>(pool: readonly T[]): T {
 }
 
 // ---------------------------------------------------------------------------
-// Client
+// Clients
 // ---------------------------------------------------------------------------
 
-let client: Anthropic | null = null;
-/** The credentials `client` was built from, so a change can be noticed. */
-let clientFingerprint = "";
+/** One live gateway. */
+interface Live {
+  client: Anthropic;
+  /**
+   * Whether this endpoint has already said it does not understand the rich request.
+   *
+   * Latched per endpoint rather than globally, so one gateway that only speaks plain
+   * `/v1/messages` does not cost every other gateway its structured output — and so the
+   * wasted first call is paid once each rather than before every line the bot writes.
+   */
+  plainShape: boolean;
+}
 
 /**
- * Whether this endpoint has already said it does not understand the rich request.
+ * Clients by credential digest.
  *
- * Latched until the credentials change, so the wasted first call is paid once rather
- * than before every line the bot writes.
+ * Kept between ticks because the settings rarely change and building a client is not
+ * free, but keyed on a **digest** of the credentials rather than the credentials
+ * themselves: nothing in this process should be holding a map whose keys are API keys.
+ * Capped, so an admin editing keys all afternoon cannot grow it without bound.
  */
-let plainShape = false;
+const live = new Map<string, Live>();
+const LIVE_MAX = 8;
 
-/**
- * The SDK client for these settings, or null when there is no key anywhere.
- *
- * Keyed on the credentials rather than memoised for the life of the process, because
- * the admin panel can change them underneath a running container: a key saved from a
- * phone has to take effect on the next tick, not on the next deploy.
- */
-function getClient(settings: BotSettings): Anthropic | null {
-  const { apiKey, baseUrl } = settings;
-  if (!apiKey) return null; // No key configured — canned lines only.
+function clientFor(candidate: BotCandidate): Live {
+  const digest = createHash("sha256")
+    .update(`${candidate.id ?? "default"}\n${candidate.apiKey}\n${candidate.baseUrl ?? ""}`)
+    .digest("hex");
 
-  const fingerprint = `${apiKey}\n${baseUrl ?? ""}`;
-  if (!client || fingerprint !== clientFingerprint) {
+  const existing = live.get(digest);
+  if (existing) return existing;
+
+  const entry: Live = {
     // An unset base URL is safe to pass: the SDK takes it as a destructuring default,
     // so `undefined` still falls through to api.anthropic.com rather than clearing it.
-    client = new Anthropic({ apiKey, baseURL: baseUrl, maxRetries: 2 });
-    clientFingerprint = fingerprint;
-    // The latch is a fact about one endpoint, not about the bot. A new base URL has
-    // earned a fresh chance at the shape the old one refused.
-    plainShape = false;
+    client: new Anthropic({
+      apiKey: candidate.apiKey,
+      baseURL: candidate.baseUrl,
+      maxRetries: 2,
+    }),
+    plainShape: false,
+  };
+
+  // A rotated key leaves its client behind. Evict the oldest rather than clearing the
+  // map — insertion order means the first key is the one added longest ago.
+  if (live.size >= LIVE_MAX) {
+    const oldest = live.keys().next();
+    if (!oldest.done) live.delete(oldest.value);
   }
-  return client;
+  live.set(digest, entry);
+  return entry;
 }
 
 /** Shared request shape. Fallbacks matter here more than usual — see below. */
@@ -245,15 +265,15 @@ function oneLine(value: unknown): string | null {
  * a canned line. A thrown error is theirs to catch.
  */
 async function askForLine<S extends z.ZodType>(
-  anthropic: Anthropic,
+  endpoint: Live,
   model: string,
   schema: S,
   field: string,
   content: Anthropic.Beta.Messages.BetaContentBlockParam[],
 ): Promise<string | null> {
-  if (!plainShape) {
+  if (!endpoint.plainShape) {
     try {
-      const message = await anthropic.beta.messages.parse({
+      const message = await endpoint.client.beta.messages.parse({
         ...REQUEST_BASE,
         model,
         system: systemBlocks(),
@@ -269,7 +289,7 @@ async function askForLine<S extends z.ZodType>(
       return oneLine((message.parsed_output as Record<string, unknown> | null)?.[field]);
     } catch (err) {
       if (!unsupportedShape(err)) throw err;
-      plainShape = true;
+      endpoint.plainShape = true;
       console.warn(
         "[bakchod-ai] endpoint refused the rich request shape; sending plain messages from here on:",
         err,
@@ -277,7 +297,7 @@ async function askForLine<S extends z.ZodType>(
     }
   }
 
-  const message = await anthropic.messages.create({
+  const message = await endpoint.client.messages.create({
     model,
     max_tokens: REQUEST_BASE.max_tokens,
     system: SYSTEM_PROMPT,
@@ -302,6 +322,50 @@ async function askForLine<S extends z.ZodType>(
       .map((block) => block.text)
       .join(" "),
   );
+}
+
+/**
+ * Ask each configured gateway in turn, until one of them answers.
+ *
+ * The distinction that makes this safe is between a **null** and a **throw**. Null is
+ * the model having answered — a refusal, or an empty reply — so the chain stops there:
+ * sending the same roast prompt down the list until one gateway agrees to write it would
+ * be shopping for a model with worse judgement. A throw is the endpoint itself failing,
+ * and the next endpoint is exactly what that is for.
+ *
+ * Null out of here therefore means one of three things, all of which the callers answer
+ * the same way: nothing is configured, the model declined, or every endpoint is down.
+ */
+async function askAcrossEndpoints<S extends z.ZodType>(
+  settings: BotSettings,
+  schema: S,
+  field: string,
+  content: Anthropic.Beta.Messages.BetaContentBlockParam[],
+): Promise<string | null> {
+  for (const candidate of settings.candidates) {
+    try {
+      const line = await askForLine(
+        clientFor(candidate),
+        candidate.model,
+        schema,
+        field,
+        content,
+      );
+      // Stamped even for a refusal: the gateway answered, which is all this records.
+      await recordEndpointOk(candidate.id);
+      return line;
+    } catch (err) {
+      // Not an endpoint problem, and not something a different gateway will answer
+      // differently. `isRecoverable` is deliberately broad, so this is close to "somebody
+      // threw a string" — but a bug in here must not read as a dead endpoint.
+      if (!isRecoverable(err)) throw err;
+      await recordEndpointFailure(candidate.id, err);
+      // The label is what the panel shows, so the log and the pill name the same thing.
+      console.warn(`[bakchod-ai] endpoint "${candidate.label}" failed:`, err);
+    }
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -331,9 +395,6 @@ export async function generateComment(
   settings: BotSettings,
   ctx: PostContext,
 ): Promise<string> {
-  const anthropic = getClient(settings);
-  if (!anthropic) return pick(CANNED_COMMENTS);
-
   const content: Anthropic.Beta.Messages.BetaContentBlockParam[] = [];
   if (ctx.image) {
     content.push({
@@ -350,27 +411,16 @@ export async function generateComment(
     text: `Someone just posted this on the feed. Drop one comment.\n\n${describePost(ctx)}`,
   });
 
-  try {
-    return (
-      (await askForLine(anthropic, settings.model, CommentSchema, "comment", content)) ??
-      pick(CANNED_COMMENTS)
-    );
-  } catch (err) {
-    if (isRecoverable(err)) {
-      console.warn("[bakchod-ai] comment generation failed, using canned line:", err);
-      return pick(CANNED_COMMENTS);
-    }
-    throw err;
-  }
+  return (
+    (await askAcrossEndpoints(settings, CommentSchema, "comment", content)) ??
+    pick(CANNED_COMMENTS)
+  );
 }
 
 export async function generatePostText(
   settings: BotSettings,
   recentCaptions: string[],
 ): Promise<string> {
-  const anthropic = getClient(settings);
-  if (!anthropic) return pick(CANNED_POSTS);
-
   const context =
     recentCaptions.length > 0
       ? `For flavour, here is what the feed has been posting lately — do not repeat these, just match the energy:\n${recentCaptions
@@ -378,21 +428,13 @@ export async function generatePostText(
           .join("\n")}`
       : "The feed is quiet right now.";
 
-  try {
-    const line = await askForLine(anthropic, settings.model, PostSchema, "tweetText", [
-      {
-        type: "text",
-        text: `Write your own post for the feed — an observation, a fake confession, or a challenge to the other bakchods. Original, not a reply.\n\n${context}`,
-      },
-    ]);
-    return line ?? pick(CANNED_POSTS);
-  } catch (err) {
-    if (isRecoverable(err)) {
-      console.warn("[bakchod-ai] post generation failed, using canned line:", err);
-      return pick(CANNED_POSTS);
-    }
-    throw err;
-  }
+  const line = await askAcrossEndpoints(settings, PostSchema, "tweetText", [
+    {
+      type: "text",
+      text: `Write your own post for the feed — an observation, a fake confession, or a challenge to the other bakchods. Original, not a reply.\n\n${context}`,
+    },
+  ]);
+  return line ?? pick(CANNED_POSTS);
 }
 
 /** What each layout is asking for, in one clause. The look is in `./card`. */
@@ -413,23 +455,12 @@ async function generateCardLine(
   settings: BotSettings,
   layout: CardLayout,
 ): Promise<string | null> {
-  const anthropic = getClient(settings);
-  if (!anthropic) return null;
-
-  try {
-    return await askForLine(anthropic, settings.model, CardSchema, "line", [
-      {
-        type: "text",
-        text: `Write ${CARD_BRIEF[layout]}. It will be printed large on a plain card, so it has to land on its own with no post around it — no reply, no context, no "as I was saying".`,
-      },
-    ]);
-  } catch (err) {
-    if (isRecoverable(err)) {
-      console.warn("[bakchod-ai] card line failed, posting text instead:", err);
-      return null;
-    }
-    throw err;
-  }
+  return askAcrossEndpoints(settings, CardSchema, "line", [
+    {
+      type: "text",
+      text: `Write ${CARD_BRIEF[layout]}. It will be printed large on a plain card, so it has to land on its own with no post around it — no reply, no context, no "as I was saying".`,
+    },
+  ]);
 }
 
 /**

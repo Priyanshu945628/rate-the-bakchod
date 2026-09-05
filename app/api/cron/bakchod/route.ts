@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { safeEqual } from "@/lib/crypto";
 import { serverEnv } from "@/lib/config";
-import { runBakchodTick } from "@/lib/ai/bakchod";
-import { pruneRateLimits } from "@/lib/ratelimit";
-import { drainOnce, recoverStuckUploads } from "@/worker/archive-uploader";
+import { runBackgroundTick } from "@/lib/background-tick";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,10 +9,17 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * Background tick: bot activity, archive uploads, housekeeping.
+ * Background tick over HTTP, for an external scheduler.
  *
- * Called by a scheduler (Vercel Cron, GitHub Actions, or the dev heartbeat in
- * instrumentation.ts). Guarded by a bearer token compared in constant time.
+ * The work itself is `runBackgroundTick` — the same function the in-process heartbeat in
+ * `instrumentation-node.ts` calls, so the two cannot drift. That heartbeat means this
+ * route is no longer what keeps the bot alive; it is here so a real cron provider can
+ * drive the tick if one is ever pointed at it.
+ *
+ * Claimed like the heartbeat, which is the point: with both wired up, whichever arrives
+ * second inside the same window does nothing instead of posting a second time.
+ *
+ * Guarded by a bearer token compared in constant time.
  */
 async function authorize(request: Request): Promise<boolean> {
   const header = request.headers.get("authorization") ?? "";
@@ -34,34 +39,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Nope." }, { status: 401 });
   }
 
-  const results: Record<string, unknown> = {};
-
-  // Each step is independent — one failing must not skip the others.
-  try {
-    results.recovered = await recoverStuckUploads();
-  } catch (err) {
-    results.recoveredError = String(err);
-  }
-
-  try {
-    results.archive = await drainOnce();
-  } catch (err) {
-    results.archiveError = String(err);
-  }
-
-  try {
-    results.bot = await runBakchodTick();
-  } catch (err) {
-    results.botError = String(err);
-  }
-
-  try {
-    results.prunedRateLimits = await pruneRateLimits();
-  } catch (err) {
-    results.pruneError = String(err);
-  }
-
-  return NextResponse.json(results);
+  return NextResponse.json(await runBackgroundTick({ claim: true }));
 }
 
 // Most cron providers issue GETs.

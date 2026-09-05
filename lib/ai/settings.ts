@@ -12,24 +12,18 @@ import "server-only";
  *     Every failure here falls back to the environment or to `BOT_DEFAULTS`, because
  *     the alternative is a settings page taking the feed down with it.
  *
- * The key is sealed with the same envelope as media: a per-row data key encrypts the
- * value, `MEDIA_MASTER_KEY` wraps the data key. That means the master key is the only
- * thing standing between a database dump and the key — which is already true of every
- * uploaded photo, so it is one secret to protect rather than two.
+ * The key is sealed with the same envelope as media — see `./sealed`, which this file
+ * shares with the fallback endpoints: a per-row data key encrypts the value,
+ * `MEDIA_MASTER_KEY` wraps the data key. That means the master key is the only thing
+ * standing between a database dump and the key — which is already true of every uploaded
+ * photo, so it is one secret to protect rather than two.
  */
 
 import { serverEnv } from "../config";
 import { prisma } from "../prisma";
-import {
-  decryptContent,
-  encryptContent,
-  generateDek,
-  loadMasterKey,
-  unwrapDek,
-  wrapDek,
-} from "../crypto";
 import { canRenderText } from "./card";
-import { toBytes } from "../media/store";
+import { seal, SHREDDED, unseal, type SealedWrite } from "./sealed";
+import { loadEndpointCredentials } from "./endpoints";
 import {
   BOT_DEFAULTS,
   type BotCredentials,
@@ -46,16 +40,34 @@ const ROW_ID = 1;
  *
  * Constant rather than a random storage key, because unlike media there is exactly
  * one row: the point of the AAD is that a wrapped key lifted from one row cannot be
- * replayed against another, and here there is no other row to replay it into.
+ * replayed against another, and here there is no other row to replay it into. The
+ * fallback endpoints in `./endpoints` do have other rows, which is why theirs is not.
  */
 const AAD = "bot-setting";
 
-export interface BotSettings extends BotTuning {
-  /** Null means no key anywhere — the bot runs on canned lines. */
-  apiKey: string | null;
+/**
+ * One gateway to try, with everything filled in.
+ *
+ * `id` is null for the credential on the settings row (or, failing that, the
+ * environment): it is the one candidate with no `BotEndpoint` to stamp health on, and
+ * it always goes last, so adding fallbacks never disturbs a setup that already works.
+ */
+export interface BotCandidate {
+  id: string | null;
+  /** For logs and the panel's health pill. Never a value.  */
+  label: string;
+  apiKey: string;
   /** Undefined means api.anthropic.com; the SDK takes it as a default. */
   baseUrl: string | undefined;
   model: string;
+}
+
+export interface BotSettings extends BotTuning {
+  /**
+   * Every gateway to try, in order. Empty means no key anywhere — the bot runs on
+   * canned lines, which is a working feed and not an error.
+   */
+  candidates: BotCandidate[];
 }
 
 type Row = NonNullable<Awaited<ReturnType<typeof findRow>>>;
@@ -82,43 +94,39 @@ async function loadRow(): Promise<Row | null> {
 
 /** Unseal the stored key, or null if there isn't one or it cannot be read. */
 function readSecret(row: Row): string | null {
-  const { secretCipher, secretIv, secretTag, wrappedKey, keyIv, keyTag } = row;
-  if (!secretCipher || !secretIv || !secretTag) return null;
-  if (!wrappedKey || !keyIv || !keyTag) return null;
-
-  try {
-    const dek = unwrapDek(
-      {
-        ciphertext: Buffer.from(wrappedKey),
-        iv: Buffer.from(keyIv),
-        tag: Buffer.from(keyTag),
-      },
-      loadMasterKey(serverEnv.mediaMasterKey),
-      AAD,
-    );
-    return decryptContent(
-      {
-        ciphertext: Buffer.from(secretCipher),
-        iv: Buffer.from(secretIv),
-        tag: Buffer.from(secretTag),
-      },
-      dek,
-    ).toString("utf8");
-  } catch {
-    // No error object in the log. The only ways this fails are a rotated master key
-    // or a tampered row, and neither is worth the chance of a fragment of key
-    // material reaching a log file somebody pastes into a chat.
-    console.error(
-      "[bakchod-ai] the saved API key could not be decrypted — falling back to the environment. Re-enter it in the admin panel.",
-    );
-    return null;
-  }
+  return unseal(row, AAD);
 }
 
-/** Everything the tick needs, environment and defaults filled in. */
+/**
+ * Everything the tick needs, environment and defaults filled in.
+ *
+ * The chain is the point: every enabled fallback endpoint first, in its own order, then
+ * the settings row's key, then the environment's. The last of those three is what the
+ * bot ran on before fallbacks existed, and it stays on the end so adding the first
+ * fallback cannot break a working bot — only extend it.
+ */
 export async function loadBotSettings(): Promise<BotSettings> {
-  const row = await loadRow();
+  const [row, endpoints] = await Promise.all([loadRow(), loadEndpointCredentials()]);
   const stored = row ? readSecret(row) : null;
+
+  // The panel wins over the environment on all three, which is the whole point of the
+  // panel: a gateway that starts refusing requests is something to fix from a phone,
+  // not from a laptop with the repo on it.
+  const apiKey = stored ?? serverEnv.anthropicKey ?? null;
+  const baseUrl = row?.baseUrl ?? serverEnv.anthropicBaseUrl;
+  const model = row?.model ?? serverEnv.bakchodModel;
+
+  const candidates: BotCandidate[] = endpoints.map((endpoint) => ({
+    id: endpoint.id,
+    label: endpoint.label,
+    apiKey: endpoint.apiKey,
+    // A fallback with no base URL of its own is a second key on the same gateway, and
+    // one with no model asks the same model. Only the key has to differ.
+    baseUrl: endpoint.baseUrl ?? baseUrl,
+    model: endpoint.model ?? model,
+  }));
+
+  if (apiKey) candidates.push({ id: null, label: "default", apiKey, baseUrl, model });
 
   return {
     enabled: row?.enabled ?? BOT_DEFAULTS.enabled,
@@ -126,12 +134,7 @@ export async function loadBotSettings(): Promise<BotSettings> {
     maxCommentsPerTick: row?.maxCommentsPerTick ?? BOT_DEFAULTS.maxCommentsPerTick,
     postIntervalMinutes: row?.postIntervalMinutes ?? BOT_DEFAULTS.postIntervalMinutes,
     cardPercent: row?.cardPercent ?? BOT_DEFAULTS.cardPercent,
-    // The panel wins over the environment on all three, which is the whole point of
-    // the panel: a gateway that starts refusing requests is something to fix from a
-    // phone, not from a laptop with the repo on it.
-    apiKey: stored ?? serverEnv.anthropicKey ?? null,
-    baseUrl: row?.baseUrl ?? serverEnv.anthropicBaseUrl,
-    model: row?.model ?? serverEnv.bakchodModel,
+    candidates,
   };
 }
 
@@ -164,6 +167,9 @@ export async function readBotStatus(): Promise<BotStatus> {
     // the built-in default, and which id that is stays off the page like the others.
     model: row?.model ? "database" : process.env.BAKCHOD_MODEL ? "environment" : "unset",
     updatedAt: row?.updatedAt.toISOString() ?? null,
+    // The one thing on this page that answers "is it running on its own" — and a
+    // timestamp cannot leak a credential, which is why it is allowed here at all.
+    lastTickAt: row?.lastTickAt?.toISOString() ?? null,
     canRenderCards,
   };
 }
@@ -177,44 +183,52 @@ export async function saveBotTuning(tuning: BotTuning): Promise<void> {
 }
 
 /**
- * Shaped to be valid for both halves of an upsert, so one object serves both.
+ * Take the next background tick, or find out somebody else already has.
  *
- * `Uint8Array<ArrayBuffer>` rather than `Buffer` for the same reason the media write
- * path uses it — see {@link toBytes}.
+ * One conditional UPDATE. A `lastTickAt` older than the window — or never set — means
+ * the tick is free, and stamping the new time in the same statement is what makes the
+ * claim atomic: `count === 1` is "this process owns the next `windowMs`", and every
+ * other runner in that window is told no. See {@link runBackgroundTick} for why the
+ * lock is a column rather than a Postgres advisory lock.
+ *
+ * A failure claims nothing rather than everything. A database that cannot be reached
+ * is not a reason to run the bot twice, and the next heartbeat is minutes away.
  */
-type CredentialWrite = {
-  secretCipher?: Uint8Array<ArrayBuffer> | null;
-  secretIv?: Uint8Array<ArrayBuffer> | null;
-  secretTag?: Uint8Array<ArrayBuffer> | null;
-  wrappedKey?: Uint8Array<ArrayBuffer> | null;
-  keyIv?: Uint8Array<ArrayBuffer> | null;
-  keyTag?: Uint8Array<ArrayBuffer> | null;
-  baseUrl?: string | null;
-  model?: string | null;
-};
+export async function claimTick(windowMs: number): Promise<boolean> {
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - windowMs);
 
-function sealSecret(value: string): CredentialWrite {
-  const dek = generateDek();
-  const sealed = encryptContent(Buffer.from(value, "utf8"), dek);
-  const wrapped = wrapDek(dek, loadMasterKey(serverEnv.mediaMasterKey), AAD);
-  return {
-    secretCipher: toBytes(sealed.ciphertext),
-    secretIv: toBytes(sealed.iv),
-    secretTag: toBytes(sealed.tag),
-    wrappedKey: toBytes(wrapped.ciphertext),
-    keyIv: toBytes(wrapped.iv),
-    keyTag: toBytes(wrapped.tag),
-  };
+  try {
+    const { count } = await prisma.botSetting.updateMany({
+      where: { id: ROW_ID, OR: [{ lastTickAt: null }, { lastTickAt: { lt: cutoff } }] },
+      data: { lastTickAt: now },
+    });
+    if (count > 0) return true;
+
+    // Nothing matched, which is two different situations: another runner holds the
+    // claim, or this database has never had a settings row at all — the table's SQL is
+    // run by hand and the row is only written when somebody saves from the panel.
+    const exists = await prisma.botSetting.findUnique({
+      where: { id: ROW_ID },
+      select: { id: true },
+    });
+    if (exists) return false;
+
+    await prisma.botSetting.create({ data: { id: ROW_ID, lastTickAt: now } });
+    return true;
+  } catch {
+    // A unique violation here is the other container winning the same race, and an
+    // unreadable table is a tick that cannot be claimed at all. Both mean: not ours.
+    // No error object in the log — this file's rule, and the reason is in `readSecret`.
+    console.warn("[tick] not claimed");
+    return false;
+  }
 }
 
-/** Nulling all six is the shred: the old ciphertext is gone, not merely ignored. */
-const CLEARED: CredentialWrite = {
-  secretCipher: null,
-  secretIv: null,
-  secretTag: null,
-  wrappedKey: null,
-  keyIv: null,
-  keyTag: null,
+/** Shaped to be valid for both halves of an upsert, so one object serves both. */
+type CredentialWrite = Partial<SealedWrite> & {
+  baseUrl?: string | null;
+  model?: string | null;
 };
 
 /**
@@ -229,7 +243,8 @@ export async function saveBotCredentials(patch: BotCredentials): Promise<void> {
   const data: CredentialWrite = {};
 
   if (patch.apiKey !== undefined) {
-    Object.assign(data, patch.apiKey === "" ? CLEARED : sealSecret(patch.apiKey));
+    // `SHREDDED` nulls all six columns: the old ciphertext is gone, not merely ignored.
+    Object.assign(data, patch.apiKey === "" ? SHREDDED : seal(patch.apiKey, AAD));
   }
   if (patch.baseUrl !== undefined) data.baseUrl = patch.baseUrl || null;
   if (patch.model !== undefined) data.model = patch.model || null;
