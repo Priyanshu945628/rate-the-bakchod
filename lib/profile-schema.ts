@@ -36,6 +36,11 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   "auth",
   "ai",
   "bakchod",
+  // The two house accounts. They are created directly, not through this schema, so
+  // reserving them costs nothing and stops a stranger claiming the handle the
+  // platform's own notices arrive from.
+  "bakchod_ai",
+  "ratethebakchod",
   "feed",
   "home",
   "leaderboard",
@@ -55,9 +60,22 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The name shown everywhere. No forbidden characters, and not literally "AI" or
- * "House AI" — those names belong to the house account and a stranger taking
- * them would read as the platform speaking.
+ * Names that would read as the platform or the bot talking, in the shapes somebody
+ * would actually try. Compared after the whitespace collapse below, so "Rate  the
+ * Bakchod" is caught by the same entry.
+ */
+const RESERVED_NAMES: ReadonlySet<string> = new Set([
+  "ai",
+  "house ai",
+  "bakchod ai",
+  "rate the bakchod",
+  "ratethebakchod",
+]);
+
+/**
+ * The name shown everywhere. No forbidden characters, and not one of the house
+ * names — those belong to the bot and to the platform's own account, and a stranger
+ * wearing one would read as the platform speaking.
  */
 export const DisplayNameSchema = z
   .string()
@@ -65,7 +83,7 @@ export const DisplayNameSchema = z
   .min(1, "Give yourself a name.")
   .max(limits.displayNameMaxLength, `Keep the name under ${limits.displayNameMaxLength} characters.`)
   .transform((v) => v.replace(/\s+/g, " "))
-  .refine((v) => v.toLowerCase() !== "ai" && v.toLowerCase() !== "house ai", {
+  .refine((v) => !RESERVED_NAMES.has(v.toLowerCase()), {
     message: "That name belongs to the house bakchod.",
   });
 

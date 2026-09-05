@@ -144,8 +144,9 @@ export function describeNotification(
     case "USER_JOINED":
       return { text: `${who} joined Rate the Bakchod`, href: actorHref };
     case "ADMIN_HIDE":
-      // No actor: which moderator acted is not the reader's business, and naming
-      // one turns a moderation decision into a personal one.
+      // The actor is the platform's own account, so the bell shows Rate the Bakchod
+      // rather than a person. Which moderator pressed the button stays out of it:
+      // naming one turns a policy decision into a personal one.
       return { text: "A moderator hid one of your posts", href: null };
     case "ADMIN_DELETE":
       // No link either. The post is gone everywhere except the author's own
@@ -180,7 +181,10 @@ function toClient(row: NotificationRow, selfHandle: string): ClientNotification 
 export interface NotifyInput {
   /** Who is being told. */
   userId: string;
-  /** Who caused it. Null for system events — the two `ADMIN_*` types. */
+  /**
+   * Who caused it. The two `ADMIN_*` types carry the platform's own account rather
+   * than the moderator who acted, so a notice arrives from Rate the Bakchod.
+   */
   actorId?: string | null;
   type: NotificationType;
   postId?: string | null;
@@ -335,7 +339,10 @@ export async function notifyPostAuthor(
 export async function announceJoin(joiner: { id: string }): Promise<void> {
   try {
     const recipients = await prisma.user.findMany({
-      where: { id: { not: joiner.id }, isAI: false },
+      // `supabaseId` rather than `isAI`: the test is "can this account be signed
+      // into", which excludes the bot and the platform account alike. Fanning out
+      // to a house account writes rows nobody will ever mark read.
+      where: { id: { not: joiner.id }, supabaseId: { not: null } },
       // Most recently seen first, so if the cap ever bites it keeps the people who
       // are actually here. Nulls (never opened a page) sort last.
       orderBy: [{ lastSeenAt: { sort: "desc", nulls: "last" } }, { id: "asc" }],
@@ -423,14 +430,16 @@ export async function notifyMentions(input: {
 
     const users = await prisma.user.findMany({
       where: { handle: { in: handles } },
-      select: { id: true, isAI: true },
+      select: { id: true, supabaseId: true },
     });
 
     await Promise.all(
       users
-        // The AI is not a person to be pinged. It reads the feed on its own
-        // schedule and has no bell.
-        .filter((u) => !u.isAI && !skip.has(u.id))
+        // A house account is not a person to be pinged. No `supabaseId` means
+        // nobody can sign in as it, so its bell is a table nobody opens — true of
+        // the bot, which reads the feed on its own schedule, and of the platform
+        // account, which every announcement is written from.
+        .filter((u) => u.supabaseId !== null && !skip.has(u.id))
         .map((u) =>
           notify({
             userId: u.id,

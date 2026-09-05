@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { authorizeWrite, handleRouteError, jsonError, readMultipart } from "@/lib/api";
 import { limits } from "@/lib/config";
+import { ensureOfficialUser } from "@/lib/house-accounts";
 import { createPost, fetchFeed, parseFeedTab, toClientPost } from "@/lib/posts";
 import { fetchPrivacy, visibilityAllows } from "@/lib/profile";
 
@@ -70,16 +71,20 @@ export async function POST(request: Request) {
       buffer = Buffer.from(await file.arrayBuffer());
     }
 
+    // Silently ignored for everyone else rather than refused: this field is not in
+    // the ordinary composer, so a request carrying it is one somebody built by hand,
+    // and the answer to that is a normal post, not a hint about what the flag does.
+    const official = form.get("official") === "1" && auth.user.isAdmin;
+
     const post = await createPost({
-      author: auth.user,
+      // An update is the platform talking, so the platform's account signs it. The
+      // admin who wrote it is not named anywhere on the card — an announcement is
+      // not a personal post, and next month a different admin writes the next one.
+      author: official ? await ensureOfficialUser() : auth.user,
       caption: typeof caption === "string" ? caption : null,
       tweetText: typeof tweetText === "string" ? tweetText : null,
       file: buffer,
-      // Silently ignored for everyone else rather than refused: this field is not
-      // in the ordinary composer, so a request carrying it is one somebody built by
-      // hand, and the answer to that is a normal post, not a hint about what the
-      // flag does.
-      official: form.get("official") === "1" && auth.user.isAdmin,
+      official,
     });
 
     return NextResponse.json({ id: post.id }, { status: 201 });

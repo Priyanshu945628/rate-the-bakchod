@@ -18,6 +18,8 @@ export default async function AdminPage() {
   // a permission — and `robots: noindex` above keeps it out of search either way.
   if (!user?.isAdmin) redirect("/");
 
+  // The house accounts and this admin's own profile are ensured in `layout.tsx`, so
+  // every admin surface sets them up rather than only this one.
   const reports = await fetchReportRows();
 
   return (

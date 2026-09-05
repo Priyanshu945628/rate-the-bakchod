@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { handleRouteError, jsonError, readJsonBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
+import { officialActorId } from "@/lib/house-accounts";
 import { notify } from "@/lib/notifications";
 import { prisma } from "@/lib/prisma";
 import { wipeTheme } from "@/lib/profile";
@@ -52,12 +53,14 @@ export async function POST(request: Request) {
         },
         select: { authorId: true },
       });
-      // No actor on either: which moderator pressed the button is not the author's
-      // business, and naming one turns a policy decision into a personal one.
-      // Unhiding notifies nobody — there is nothing to apologise for in a bell.
+      // The notice comes from the platform's account, not from the admin who
+      // pressed the button: which moderator acted is not the author's business, and
+      // naming one turns a policy decision into a personal one. Unhiding notifies
+      // nobody — there is nothing to apologise for in a bell.
       if (hide) {
         void notify({
           userId: post.authorId,
+          actorId: await officialActorId(),
           type: deleted ? "ADMIN_DELETE" : "ADMIN_HIDE",
           postId,
         });
@@ -80,7 +83,12 @@ export async function POST(request: Request) {
         },
         select: { authorId: true },
       });
-      void notify({ userId: post.authorId, type: "ADMIN_HIDE", postId });
+      void notify({
+        userId: post.authorId,
+        actorId: await officialActorId(),
+        type: "ADMIN_HIDE",
+        postId,
+      });
       return NextResponse.json({ ok: true, shredded: true });
     }
 
