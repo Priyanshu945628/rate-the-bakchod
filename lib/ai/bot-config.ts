@@ -74,6 +74,14 @@ const API_KEY = credential(400).refine(
   "That key has whitespace in it — check the paste.",
 );
 
+/**
+ * The origin of a gateway, with no path on it.
+ *
+ * The path is chosen per call, not stored: `/v1/messages` for an Anthropic-shaped
+ * endpoint and `/v1/chat/completions` for an OpenAI-shaped one, whichever this gateway
+ * turns out to serve. Which is also why a pasted `/v1` has to be caught here — it would
+ * be doubled on either of them.
+ */
 const BASE_URL = credential(300)
   .refine(
     (value) => value === undefined || value === "" || /^https?:\/\//i.test(value),
@@ -81,7 +89,7 @@ const BASE_URL = credential(300)
   )
   .refine(
     (value) => value === undefined || value === "" || !/\/v1\/?$/.test(value),
-    "Drop the /v1 — the SDK adds it, so this would ask for /v1/v1/messages.",
+    "Drop the /v1 — the path is added for you, so this would ask for /v1/v1/… instead.",
   );
 
 const MODEL = credential(120).refine(

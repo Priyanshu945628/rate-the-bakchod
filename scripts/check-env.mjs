@@ -232,7 +232,7 @@ check("ANTHROPIC_BASE_URL", {
   validate: (raw, name) => {
     if (!/^https?:\/\//i.test(raw)) return "should start with http:// or https://";
     if (/\/v1\/?$/.test(raw)) {
-      return "ends in /v1 — the SDK appends that itself, so every call would ask for /v1/v1/messages. Use the origin only";
+      return "ends in /v1 — the path is appended for you, so every call would ask for /v1/v1/... . Use the origin only";
     }
     if (!env.ANTHROPIC_API_KEY) {
       notes.push(

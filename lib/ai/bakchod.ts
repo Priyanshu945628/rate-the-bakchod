@@ -17,11 +17,12 @@ import "server-only";
  * real people, so the boundary between teasing the *post* and attacking the
  * *person* has to be stated explicitly, not assumed.
  *
- * Rule 2 is why there are two request shapes rather than one — see `askForLine`.
+ * Rule 2 is why there are three request shapes rather than one — see `askForLine`.
  * Falling back to a canned line is the right answer to a rate limit and the wrong
- * answer to a gateway that does not speak beta, because the second one never clears
- * up on its own. It is also why there is a *list* of gateways rather than one: an
- * expired key used to be the whole bot, and now it is one entry that gets skipped.
+ * answer to a gateway that does not speak beta, or does not speak `/v1/messages` at
+ * all, because neither of those ever clears up on its own. It is also why there is a
+ * *list* of gateways rather than one: an expired key used to be the whole bot, and now
+ * it is one entry that gets skipped.
  *
  * Nothing in here decides how often any of it happens. Cadence and credentials both
  * come from `./settings`, so an admin can retune the bot, add another gateway or reorder
@@ -42,6 +43,7 @@ import { readMedia, type MediaRow } from "../media/store";
 import { addComment, createPost } from "../posts";
 import { CARD_LAYOUTS, renderBakchodCard, type CardLayout } from "./card";
 import { recordEndpointFailure, recordEndpointOk } from "./endpoints";
+import { askOpenAIShape } from "./openai-shape";
 import { loadBotSettings, type BotCandidate, type BotSettings } from "./settings";
 
 // ---------------------------------------------------------------------------
@@ -175,17 +177,31 @@ function pick<T>(pool: readonly T[]): T {
 // Clients
 // ---------------------------------------------------------------------------
 
+/**
+ * The request shape an endpoint has been found to accept.
+ *
+ * A one-way ladder, walked at most once per endpoint per process:
+ *
+ *  - `rich`   — betas, adaptive thinking, a cached persona, a schema. What Anthropic
+ *               itself takes, and what a faithful proxy in front of it takes too.
+ *  - `plain`  — an ordinary `/v1/messages` call, for a gateway that forwards the
+ *               endpoint but knows nothing about the parameters on it.
+ *  - `openai` — `/v1/chat/completions`, for a gateway that never had `/v1/messages`.
+ */
+type RequestShape = "rich" | "plain" | "openai";
+
 /** One live gateway. */
 interface Live {
   client: Anthropic;
   /**
-   * Whether this endpoint has already said it does not understand the rich request.
+   * How much of the request this endpoint has turned out to understand.
    *
    * Latched per endpoint rather than globally, so one gateway that only speaks plain
-   * `/v1/messages` does not cost every other gateway its structured output — and so the
-   * wasted first call is paid once each rather than before every line the bot writes.
+   * `/v1/messages` — or only speaks OpenAI — does not cost every other gateway its
+   * structured output, and so the wasted probe is paid once each rather than before
+   * every line the bot writes.
    */
-  plainShape: boolean;
+  shape: RequestShape;
 }
 
 /**
@@ -215,7 +231,7 @@ function clientFor(candidate: BotCandidate): Live {
       baseURL: candidate.baseUrl,
       maxRetries: 2,
     }),
-    plainShape: false,
+    shape: "rich",
   };
 
   // A rotated key leaves its client behind. Evict the oldest rather than clearing the
@@ -265,15 +281,31 @@ function isRecoverable(err: unknown): boolean {
 /**
  * True for the answer a bare `/v1/messages` proxy gives to the parameters above.
  *
- * `ANTHROPIC_BASE_URL` usually points at a gateway that forwards one endpoint and
- * knows nothing about betas, adaptive thinking, structured outputs or prompt
- * caching, so it rejects the whole request over a field it has never heard of. That
- * is not a reason to fall back to canned lines — the same prompt sent the plain way
- * would have worked — so it gets a retry rather than a shrug.
+ * A base URL usually points at a gateway that forwards one endpoint and knows nothing
+ * about betas, adaptive thinking, structured outputs or prompt caching, so it rejects
+ * the whole request over a field it has never heard of. That is not a reason to fall
+ * back to canned lines — the same prompt sent the plain way would have worked — so it
+ * gets a retry rather than a shrug.
  */
 function unsupportedShape(err: unknown): boolean {
   if (!(err instanceof Anthropic.APIError)) return false;
   return err.status === 400 || err.status === 404 || err.status === 422;
+}
+
+/**
+ * True when there is no `/v1/messages` on the other end at all.
+ *
+ * Deliberately narrower than {@link unsupportedShape}: 400 means the endpoint exists and
+ * disliked the body, whereas 404 and 405 mean the SDK has been posting at a path this
+ * host does not serve. Most gateways behind a pasted base URL are OpenAI-shaped, and
+ * against one of those *every* call the SDK makes is this — so rather than let the bot
+ * recite canned Hinglish forever behind a healthy-looking panel, the next thing tried is
+ * `/v1/chat/completions`. If that is not there either, the throw from it ends this
+ * endpoint's turn and the chain moves on, which is what it would have done anyway.
+ */
+function missingPath(err: unknown): boolean {
+  if (!(err instanceof Anthropic.APIError)) return false;
+  return err.status === 404 || err.status === 405;
 }
 
 /** Trim, cap, and treat an empty reply as no reply. */
@@ -283,31 +315,45 @@ function oneLine(value: unknown): string | null {
   return text.length > 0 ? text.slice(0, 600) : null;
 }
 
+/** What the schema said, for the two paths that have no schema to say it. */
+const LINE_PLAIN_INSTRUCTION =
+  "Reply with the line itself. No JSON, no quotes, no preamble.";
+
+/** Note the drop down a rung, once, in the words the log reader needs. */
+function noteShape(from: RequestShape, to: RequestShape, err: unknown) {
+  const why =
+    to === "openai"
+      ? "no /v1/messages on this endpoint; treating it as OpenAI-compatible from here on"
+      : "endpoint refused the rich request shape; sending plain messages from here on";
+  console.warn(`[bakchod-ai] ${why} (was ${from}):`, err);
+}
+
 /**
  * Ask for one line, in whichever request shape this endpoint accepts.
  *
  * First choice is the rich one: server-side fallbacks so a tripped classifier still
  * answers, adaptive thinking, a cached persona, and a schema so the reply arrives
- * needing no cleanup. When the endpoint refuses that shape the same prompt goes out
- * as an ordinary `messages.create` and the text is read back by hand. Worse — but
- * the alternative is a bot that has been quietly reciting canned Hinglish since the
- * day a gateway was configured, with a healthy-looking log to match.
+ * needing no cleanup. When the endpoint refuses that shape the same prompt goes out as
+ * an ordinary `messages.create`, and when it turns out to have no `/v1/messages` at all
+ * the same prompt goes out again as an OpenAI completion. Each rung is worse than the
+ * one above it — but the alternative is a bot that has been quietly reciting canned
+ * Hinglish since the day a gateway was configured, with a healthy-looking log to match.
  *
- * `null` means no usable line: a refusal, or an empty reply. Callers turn that into
- * a canned line. A thrown error is theirs to catch.
+ * `null` means no usable line: a refusal, or an empty reply. Callers turn that into a
+ * canned line. A thrown error is theirs to catch.
  */
 async function askForLine<S extends z.ZodType>(
   endpoint: Live,
-  model: string,
+  candidate: BotCandidate,
   schema: S,
   field: string,
   content: Anthropic.Beta.Messages.BetaContentBlockParam[],
 ): Promise<string | null> {
-  if (!endpoint.plainShape) {
+  if (endpoint.shape === "rich") {
     try {
       const message = await endpoint.client.beta.messages.parse({
         ...REQUEST_BASE,
-        model,
+        model: candidate.model,
         system: systemBlocks(),
         output_config: {
           effort: OUTPUT_EFFORT,
@@ -321,38 +367,47 @@ async function askForLine<S extends z.ZodType>(
       return oneLine((message.parsed_output as Record<string, unknown> | null)?.[field]);
     } catch (err) {
       if (!unsupportedShape(err)) throw err;
-      endpoint.plainShape = true;
-      console.warn(
-        "[bakchod-ai] endpoint refused the rich request shape; sending plain messages from here on:",
-        err,
-      );
+      endpoint.shape = "plain";
+      noteShape("rich", "plain", err);
     }
   }
 
-  const message = await endpoint.client.messages.create({
-    model,
-    max_tokens: REQUEST_BASE.max_tokens,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: [
-          // Only text and image blocks are ever built for this, and those two are
-          // shaped identically in both unions — the beta one is just the wider pair.
-          ...(content as Anthropic.ContentBlockParam[]),
-          // The schema carried this instruction on the rich path.
-          { type: "text", text: "Reply with the line itself. No JSON, no quotes, no preamble." },
+  if (endpoint.shape === "plain") {
+    try {
+      const message = await endpoint.client.messages.create({
+        model: candidate.model,
+        max_tokens: REQUEST_BASE.max_tokens,
+        system: SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: [
+              // Only text and image blocks are ever built for this, and those two are
+              // shaped identically in both unions — the beta one is just the wider pair.
+              ...(content as Anthropic.ContentBlockParam[]),
+              // The schema carried this instruction on the rich path.
+              { type: "text", text: LINE_PLAIN_INSTRUCTION },
+            ],
+          },
         ],
-      },
-    ],
-  });
+      });
 
-  if (message.stop_reason === "refusal") return null;
+      if (message.stop_reason === "refusal") return null;
+      return oneLine(
+        message.content
+          .filter((block): block is Anthropic.TextBlock => block.type === "text")
+          .map((block) => block.text)
+          .join(" "),
+      );
+    } catch (err) {
+      if (!missingPath(err)) throw err;
+      endpoint.shape = "openai";
+      noteShape("plain", "openai", err);
+    }
+  }
+
   return oneLine(
-    message.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join(" "),
+    await askOpenAIShape(candidate, SYSTEM_PROMPT, content, LINE_PLAIN_INSTRUCTION),
   );
 }
 
@@ -410,23 +465,37 @@ function cleanPoll(question: unknown, options: readonly unknown[]): GeneratedPol
 }
 
 /**
+ * A reply that was asked for as lines, back into a question and its answers.
+ *
+ * Shared by both schema-less paths, because a gateway that does not speak structured
+ * outputs and a gateway that does not speak `/v1/messages` were sent the same words and
+ * decorate their answers the same way.
+ */
+function pollFromLines(text: string): GeneratedPoll | null {
+  const lines = text
+    .split("\n")
+    .map(stripMarker)
+    .filter((line) => line.length > 0);
+  return cleanPoll(lines[0], lines.slice(1));
+}
+
+/**
  * Ask for a poll, in whichever request shape this endpoint accepts.
  *
- * The same two-shape story as {@link askForLine}, and it shares the latch: an endpoint
- * that has already refused the rich shape goes straight to plain, whichever call found
- * that out. The difference is only in the reading — a schema on one side, the first
- * line and the rest on the other.
+ * The same ladder as {@link askForLine}, and it shares the latch: an endpoint that has
+ * already found its rung goes straight to it, whichever call found that out. The
+ * difference is only in the reading — a schema on the top rung, lines on the other two.
  */
 async function askForPoll(
   endpoint: Live,
-  model: string,
+  candidate: BotCandidate,
   content: Anthropic.Beta.Messages.BetaContentBlockParam[],
 ): Promise<GeneratedPoll | null> {
-  if (!endpoint.plainShape) {
+  if (endpoint.shape === "rich") {
     try {
       const message = await endpoint.client.beta.messages.parse({
         ...REQUEST_BASE,
-        model,
+        model: candidate.model,
         system: systemBlocks(),
         output_config: {
           effort: OUTPUT_EFFORT,
@@ -446,40 +515,49 @@ async function askForPoll(
       );
     } catch (err) {
       if (!unsupportedShape(err)) throw err;
-      endpoint.plainShape = true;
-      console.warn(
-        "[bakchod-ai] endpoint refused the rich request shape; sending plain messages from here on:",
-        err,
-      );
+      endpoint.shape = "plain";
+      noteShape("rich", "plain", err);
     }
   }
 
-  const message = await endpoint.client.messages.create({
-    model,
-    max_tokens: REQUEST_BASE.max_tokens,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: [
-          ...(content as Anthropic.ContentBlockParam[]),
-          { type: "text", text: POLL_PLAIN_INSTRUCTION },
+  if (endpoint.shape === "plain") {
+    try {
+      const message = await endpoint.client.messages.create({
+        model: candidate.model,
+        max_tokens: REQUEST_BASE.max_tokens,
+        system: SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: [
+              ...(content as Anthropic.ContentBlockParam[]),
+              { type: "text", text: POLL_PLAIN_INSTRUCTION },
+            ],
+          },
         ],
-      },
-    ],
-  });
+      });
 
-  if (message.stop_reason === "refusal") return null;
+      if (message.stop_reason === "refusal") return null;
+      return pollFromLines(
+        message.content
+          .filter((block): block is Anthropic.TextBlock => block.type === "text")
+          .map((block) => block.text)
+          .join("\n"),
+      );
+    } catch (err) {
+      if (!missingPath(err)) throw err;
+      endpoint.shape = "openai";
+      noteShape("plain", "openai", err);
+    }
+  }
 
-  const lines = message.content
-    .filter((block): block is Anthropic.TextBlock => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .split("\n")
-    .map(stripMarker)
-    .filter((line) => line.length > 0);
-
-  return cleanPoll(lines[0], lines.slice(1));
+  const text = await askOpenAIShape(
+    candidate,
+    SYSTEM_PROMPT,
+    content,
+    POLL_PLAIN_INSTRUCTION,
+  );
+  return text === null ? null : pollFromLines(text);
 }
 
 /**
@@ -496,14 +574,18 @@ async function askForPoll(
  *
  * Generic in what is being asked for, because a poll comes back as an object and a
  * roast as a string, and which of those it is has nothing to do with failover.
+ *
+ * The whole candidate is handed to `ask`, not just its model: the OpenAI rung of the
+ * ladder is a bare `fetch` rather than the SDK client, so it needs the key and the base
+ * URL that `clientFor` would otherwise be the only holder of.
  */
 async function acrossEndpoints<T>(
   settings: BotSettings,
-  ask: (endpoint: Live, model: string) => Promise<T | null>,
+  ask: (endpoint: Live, candidate: BotCandidate) => Promise<T | null>,
 ): Promise<T | null> {
   for (const candidate of settings.candidates) {
     try {
-      const answer = await ask(clientFor(candidate), candidate.model);
+      const answer = await ask(clientFor(candidate), candidate);
       // Stamped even for a refusal: the gateway answered, which is all this records.
       await recordEndpointOk(candidate.id);
       return answer;
@@ -528,8 +610,8 @@ function askAcrossEndpoints<S extends z.ZodType>(
   field: string,
   content: Anthropic.Beta.Messages.BetaContentBlockParam[],
 ): Promise<string | null> {
-  return acrossEndpoints(settings, (endpoint, model) =>
-    askForLine(endpoint, model, schema, field, content),
+  return acrossEndpoints(settings, (endpoint, candidate) =>
+    askForLine(endpoint, candidate, schema, field, content),
   );
 }
 
@@ -622,8 +704,8 @@ export async function generatePoll(
   settings: BotSettings,
   recentCaptions: string[],
 ): Promise<GeneratedPoll | null> {
-  return acrossEndpoints(settings, (endpoint, model) =>
-    askForPoll(endpoint, model, [
+  return acrossEndpoints(settings, (endpoint, candidate) =>
+    askForPoll(endpoint, candidate, [
       {
         type: "text",
         text: `Run a poll on the feed: one question, and ${limits.pollMinOptions} to ${limits.pollMaxOptions} answers people pick between. Something this group would actually argue about — not a quiz, and not a question with one obviously right answer.\n\n${feedFlavour(recentCaptions)}`,
