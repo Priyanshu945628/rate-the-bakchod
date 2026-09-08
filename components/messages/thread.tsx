@@ -95,6 +95,29 @@ interface MessagePatch {
   deleted: boolean;
 }
 
+/**
+ * The message currently on its way to the server.
+ *
+ * Local to this component and never on the wire, which is why it is not a
+ * `ClientMessage`: it has no server id, and deliberately no `createdAt` — the time a
+ * message was sent at is the server's to decide, and a bubble showing a clock that is
+ * about to be replaced by a different one is a small lie for no gain.
+ *
+ * `imageUrl` is an object URL this entry *owns*. The composer revokes its own preview
+ * URL the moment the picked photo clears, which on a successful send is before the
+ * uploaded copy has loaded — so the pending bubble makes a second one from the same
+ * file and releases it itself.
+ */
+interface PendingMessage {
+  /** A local id, unique per send. Never a server id, and never in the DOM as one. */
+  id: string;
+  body: string | null;
+  imageUrl: string | null;
+  /** The chosen filter, as CSS, so the bubble shows the photo that is being sent. */
+  imageFilter: string;
+  replyTo: ClientReplyRef | null;
+}
+
 export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId: string }) {
   const [entries, setEntries] = useState<ClientThreadEntry[]>(initial.entries);
   const [cursor, setCursor] = useState<string | null>(initial.prevCursor);
@@ -104,6 +127,8 @@ export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId:
   const [error, setError] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<ClientMessage | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+  /** What the composer has handed over and not heard back about yet. */
+  const [pending, setPending] = useState<PendingMessage | null>(null);
 
   const scroller = useRef<HTMLDivElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
@@ -218,10 +243,22 @@ export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId:
   }, [id, lastId]);
 
   // Bottom-anchored, like every chat. Only when something was appended — a
-  // prepended page of history keeps its position, handled in `loadOlder`.
+  // prepended page of history keeps its position, handled in `loadOlder`. A pending
+  // bubble counts as appended: it is the thing you just wrote, and it would otherwise
+  // arrive below the fold on a thread that exactly fills the panel.
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
-  }, [lastId]);
+  }, [lastId, pending?.id]);
+
+  // The pending bubble's own copy of the photo, released when that bubble goes. Same
+  // shape as the composer's preview effect: the cleanup runs before the next send's
+  // effect and on unmount, so no send can leave a URL behind.
+  useEffect(() => {
+    const url = pending?.imageUrl;
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [pending?.imageUrl]);
 
   // The typing bubble gets the same treatment, but only from near the bottom. It
   // comes and goes on a 4s timer, and yanking somebody out of the history they were
@@ -295,7 +332,20 @@ export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId:
     }
   }
 
-  function onSent(message: ClientMessage) {
+  /**
+   * A send finished. `null` means it failed.
+   *
+   * The pending bubble goes either way. On success the server's copy takes its place
+   * in the same paint, because both state changes are batched; on failure the words
+   * are still sitting in the composer where they were typed, so leaving a copy in the
+   * thread would show the same unsent message twice.
+   *
+   * The append is still guarded by id: the sender gets their own message back down the
+   * stream as well as in this response, and whichever arrives second must do nothing.
+   */
+  function onSent(message: ClientMessage | null) {
+    setPending(null);
+    if (!message) return;
     setEntries((prev) =>
       prev.some((e) => e.id === message.id) ? prev : [...prev, { entry: "message", ...message }],
     );
@@ -347,6 +397,7 @@ export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId:
               onError={setError}
             />
           ))}
+          {pending ? <PendingBubble pending={pending} onJump={jumpTo} /> : null}
           {typing ? <TypingBubble counterpart={counterpart} /> : null}
         </ul>
         <div ref={bottom} />
@@ -361,6 +412,7 @@ export function Thread({ initial, viewerId }: { initial: ClientThread; viewerId:
         canSend={canSend}
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(null)}
+        onSending={setPending}
         onSent={onSent}
       />
     </section>
@@ -685,6 +737,71 @@ function Bubble({
               <CheckIcon className="h-3 w-3" />
             )
           ) : null}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+/**
+ * The message on its way out.
+ *
+ * This is where sending is shown, and the send button keeps its arrow throughout. A
+ * spinner in the control you just pressed reports on the button; the words already
+ * sitting in the thread under one report on the message, which is the thing being
+ * waited for — and on a photo that is the difference between an empty-looking chat and
+ * a visible upload.
+ *
+ * Thinner than {@link Bubble} on purpose. No ⋯: there is nothing yet to reply to, edit
+ * or unsend. No tick: nothing has been delivered, let alone read. No clock, because the
+ * timestamp is the server's to set. No `msg-` id either — a quote must never be able to
+ * jump to a message that does not exist yet.
+ */
+function PendingBubble({
+  pending,
+  onJump,
+}: {
+  pending: PendingMessage;
+  onJump: (messageId: string) => void;
+}) {
+  return (
+    <li className="flex items-end justify-end gap-1.5">
+      <div className="flex min-w-0 max-w-[min(78%,30rem)] flex-col gap-1">
+        <div className="flex items-center justify-end gap-1.5">
+          {/* The gutter the ⋯ occupies beside a sent bubble, so nothing slides
+              sideways when the server's copy takes this one's place. */}
+          <span aria-hidden className="h-6 w-6 shrink-0" />
+
+          <div className="chat-mine min-w-0 overflow-hidden rounded-card px-3 py-2 opacity-70">
+            {pending.replyTo ? <Quote reply={pending.replyTo} mine onJump={onJump} /> : null}
+
+            {pending.imageUrl ? (
+              // The picked file, under the chosen filter — not the rendered upload,
+              // which does not exist until the send is already under way. Plain
+              // `img`: there is nothing here to open in the viewer that the composer
+              // was not already showing.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={pending.imageUrl}
+                alt=""
+                style={{ filter: pending.imageFilter || undefined }}
+                className={`max-h-[280px] w-auto rounded-ctl ${pending.body ? "mb-1.5" : ""}`}
+              />
+            ) : null}
+
+            {pending.body ? (
+              // No `LinkCard` — that is a fetch for a bubble measured in milliseconds.
+              // The real one below it will have the preview.
+              <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink">
+                <Linkified text={pending.body} />
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-1 px-1 text-[10px] text-faint">
+          <SpinnerIcon className="h-3 w-3 animate-spin" />
+          Sending…
         </div>
       </div>
     </li>
@@ -1017,19 +1134,26 @@ const EMOJI = [
  *
  * There is no microphone: DMs carry text and images, and a button that cannot record
  * is a promise the app does not keep.
+ *
+ * The blue circle never becomes a spinner. What is in flight is handed up to the thread
+ * the moment Send is pressed and shown there as a bubble — see {@link PendingBubble} —
+ * so the control stays a control and the waiting happens where the message is.
  */
 function Composer({
   conversationId,
   canSend,
   replyTo,
   onCancelReply,
+  onSending,
   onSent,
 }: {
   conversationId: string;
   canSend: boolean;
   replyTo: ClientMessage | null;
   onCancelReply: () => void;
-  onSent: (message: ClientMessage) => void;
+  onSending: (pending: PendingMessage) => void;
+  /** Called once per send, with the server's message or null if it failed. */
+  onSent: (message: ClientMessage | null) => void;
 }) {
   const [draft, setDraft] = useState("");
   /** The picked file and a local URL for it. Nothing is uploaded until Send. */
@@ -1045,6 +1169,8 @@ function Composer({
   const trayWrap = useRef<HTMLDivElement>(null);
   /** When the last typing ping went out, so one keystroke in three does not send one. */
   const pinged = useRef(0);
+  /** Sends made from this composer, which is all a pending entry's id has to be. */
+  const sends = useRef(0);
 
   useDismiss(
     tray,
@@ -1105,11 +1231,59 @@ function Composer({
     setPhoto({ file: chosen, url: URL.createObjectURL(chosen) });
   }
 
+  /** Fit the box to its content, up to the same cap the class list enforces. */
+  function autosize(node: HTMLTextAreaElement) {
+    // Reset first: a shrinking textarea keeps the old scrollHeight otherwise.
+    node.style.height = "auto";
+    node.style.height = `${Math.min(node.scrollHeight, 120)}px`;
+  }
+
+  /**
+   * Send what is in the pill.
+   *
+   * The pill empties on the press rather than on the response, and the message is handed
+   * to the thread in the same breath: the words are in one place at a time, so nothing is
+   * on screen twice while an upload runs. Everything below reads the render-time `photo`,
+   * `css` and `replyTo` out of this closure, so clearing the state cannot pull the file
+   * or the filter out from under the request.
+   *
+   * A failure puts it all back — text, photo and its filter — because the alternative is
+   * an error message next to an empty box and no way to try again.
+   */
   async function send() {
     const text = draft.trim();
     if (!text && !photo) return;
     setBusy(true);
     setError(null);
+
+    // Handed over before a single byte goes out, because the slow part is the upload and
+    // a photo is exactly when there is something worth looking at while it runs. Its own
+    // object URL, not the preview's: the effect above revokes that one on the next line.
+    onSending({
+      id: `pending-${++sends.current}`,
+      body: text || null,
+      imageUrl: photo ? URL.createObjectURL(photo.file) : null,
+      imageFilter: css,
+      // The quote the server is about to send back, built from what is being replied
+      // to. `Quote` clamps it to one line, which is what the excerpt limit does.
+      replyTo: replyTo
+        ? {
+            id: replyTo.id,
+            senderId: replyTo.senderId,
+            excerpt: replyTo.deleted ? null : replyTo.body,
+            hasImage: replyTo.imageUrl !== null,
+            deleted: replyTo.deleted,
+          }
+        : null,
+    });
+
+    setDraft("");
+    setPhoto(null);
+    setFilter(ORIGINAL);
+    setTray(false);
+    pinged.current = 0;
+    if (box.current) box.current.style.height = "auto";
+
     try {
       let attachmentKey: string | null = null;
       if (photo) {
@@ -1143,14 +1317,20 @@ function Composer({
       };
       if (!res.ok || !data.message) throw new Error(data.error ?? "Could not send.");
       onSent(data.message);
-      setDraft("");
-      setPhoto(null);
-      setFilter(ORIGINAL);
-      setTray(false);
-      pinged.current = 0;
-      if (box.current) box.current.style.height = "auto";
     } catch (err) {
+      // The thread drops the pending bubble and the pill takes it back, so what failed
+      // is a draft again rather than a message that quietly stopped existing.
+      onSent(null);
+      setDraft(text);
+      setFilter(filter);
+      // A fresh URL for the same file: the one the preview had has been revoked by now.
+      if (photo) setPhoto({ file: photo.file, url: URL.createObjectURL(photo.file) });
       setError(err instanceof Error ? err.message : "Could not send.");
+      // Measured after the restored text is actually in the box, the same reason
+      // `loadOlder` waits a frame before it touches `scrollTop`.
+      requestAnimationFrame(() => {
+        if (box.current) autosize(box.current);
+      });
     } finally {
       setBusy(false);
     }
@@ -1196,7 +1376,6 @@ function Composer({
             <button
               type="button"
               onClick={() => setPhoto(null)}
-              disabled={busy}
               aria-label="Remove image"
               className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-pill bg-bg/80 text-ink transition-colors hover:bg-bg"
             >
@@ -1205,7 +1384,9 @@ function Composer({
           </div>
 
           {/* Each swatch is the same object URL under a different filter — one decode,
-              eight looks, and no second copy of the photo to keep in step with it. */}
+              eight looks, and no second copy of the photo to keep in step with it.
+              Nothing here needs locking while a send runs: pressing Send hands the
+              photo to the thread and empties this block in the same paint. */}
           {filters ? (
             <ul className="no-bar mt-2 flex gap-1.5 overflow-x-auto">
               {PHOTO_FILTERS.map((preset) => {
@@ -1215,10 +1396,6 @@ function Composer({
                     <button
                       type="button"
                       onClick={() => setFilter(preset.id)}
-                      // Locked once Send has started: the pixels were already drawn
-                      // through whichever filter was chosen then, and a strip that
-                      // could still move would be showing a photo nobody is sending.
-                      disabled={busy}
                       aria-pressed={on}
                       className={`flex w-[46px] flex-col items-center gap-1 rounded-ctl p-[3px] transition-colors ${
                         on ? "bg-chat/15" : "hover:bg-panel-3"
@@ -1308,9 +1485,7 @@ function Composer({
           placeholder="Message"
           onChange={(e) => {
             setDraft(e.target.value);
-            // Reset first: a shrinking textarea keeps the old scrollHeight otherwise.
-            e.target.style.height = "auto";
-            e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+            autosize(e.target);
             ping();
           }}
           onKeyDown={(e) => {
@@ -1347,11 +1522,10 @@ function Composer({
           aria-label="Send"
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-pill bg-chat text-chat-ink transition-opacity hover:opacity-90 disabled:opacity-40"
         >
-          {busy ? (
-            <SpinnerIcon className="h-4 w-4 animate-spin" />
-          ) : (
-            <SendIcon className="h-4 w-4" />
-          )}
+          {/* Always the arrow. The send in progress is a bubble in the thread, not a
+              spinner in here — `ready` is already false while one is running, so the
+              button is visibly out of action without changing what it is. */}
+          <SendIcon className="h-4 w-4" />
         </button>
       </div>
 

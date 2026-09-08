@@ -32,6 +32,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { limits } from "../config";
 import { prisma } from "../prisma";
 // The bot's account — handle, profile copy, picture — lives beside the platform's
 // own in `lib/house-accounts.ts`: an account nobody can log in as still needs a
@@ -99,6 +100,34 @@ const CardSchema = z.object({
     ),
 });
 
+/**
+ * A poll the bot wants to run.
+ *
+ * The counts are in the schema rather than only in the prose because this is the one
+ * output a post's *shape* depends on: `createPost` refuses a poll with fewer than
+ * `pollMinOptions` answers, so asking loosely and hoping would turn a slot into a
+ * logged error. Everything that comes back is clamped again in `cleanPoll` — the
+ * plain-text path below has no schema to enforce anything.
+ */
+const PollSchema = z.object({
+  question: z
+    .string()
+    .describe(
+      "The question, Hinglish, under 140 characters. It has to be answerable by picking one of the options — not open-ended, and not a yes/no you already know the answer to.",
+    ),
+  options: z
+    .array(
+      z
+        .string()
+        .describe("One answer, Hinglish, under 60 characters. Funny, but a real answer."),
+    )
+    .min(limits.pollMinOptions)
+    .max(limits.pollMaxOptions)
+    .describe(
+      `Between ${limits.pollMinOptions} and ${limits.pollMaxOptions} answers, all different, none of them obviously the correct one.`,
+    ),
+});
+
 // ---------------------------------------------------------------------------
 // Fallback pool
 // ---------------------------------------------------------------------------
@@ -132,7 +161,10 @@ const CANNED_POSTS = [
   "Aaj ka sabse bada bakchod comments mein khud declare kare. Main judge hoon.",
   "Theory: har dost group mein ek banda hota hai jo sirf content ke liye exist karta hai.",
   "Feed thoda shaant hai. Koi apne dost ki izzat ka encounter karega ya main karoon?",
-  "Poll: bakchodi talent hai ya lifestyle? Main dono maanta hoon.",
+  // No canned poll in here on purpose: a poll is buttons people press, and six of
+  // them on a loop would be the same question asked forever. When the model cannot
+  // write one, the tick posts a line instead — see `runBakchodTick`.
+  "Bakchodi ek talent hai, aur main iska self-appointed brand ambassador hoon.",
 ];
 
 function pick<T>(pool: readonly T[]): T {
@@ -324,6 +356,132 @@ async function askForLine<S extends z.ZodType>(
   );
 }
 
+/** A question and its answers, already trimmed to what a post will accept. */
+export interface GeneratedPoll {
+  question: string;
+  options: string[];
+}
+
+/**
+ * What the plain path asks for instead of a schema.
+ *
+ * Lines rather than JSON: a gateway that does not speak structured outputs is usually
+ * fronting an older model too, and a hand-written JSON object comes back with a stray
+ * trailing comma often enough to matter. Lines cannot be malformed.
+ */
+const POLL_PLAIN_INSTRUCTION = `Reply as plain lines and nothing else: the question on the first line, then one option per line, up to ${limits.pollMaxOptions} of them. No JSON, no numbering, no blank lines, no preamble.`;
+
+/** `- answer`, `2) answer`, `• answer` — whatever the plain path decorated it with. */
+function stripMarker(line: string): string {
+  return line
+    .trim()
+    .replace(/^(?:[-*•]|\d{1,2}[.)])\s+/, "")
+    .trim();
+}
+
+/**
+ * Turn whatever came back into a poll, or into nothing.
+ *
+ * Clamps rather than complains, in the same spirit as `cleanPollOptions`: a fifth
+ * option is dropped, a long one is cut, a repeated one is thrown away — because the
+ * alternative is `createPost` refusing the post and the bot losing the slot over a
+ * detail nobody would have noticed. Null only for the cases that are not a poll at
+ * all: no question, or fewer than two things to press.
+ */
+function cleanPoll(question: unknown, options: readonly unknown[]): GeneratedPoll | null {
+  const asked = oneLine(question);
+  if (!asked) return null;
+
+  const seen = new Set<string>();
+  const answers: string[] = [];
+  for (const entry of options) {
+    if (typeof entry !== "string") continue;
+    const label = entry.trim().slice(0, limits.pollOptionMaxLength).trim();
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    answers.push(label);
+    if (answers.length === limits.pollMaxOptions) break;
+  }
+
+  if (answers.length < limits.pollMinOptions) return null;
+  return { question: asked.slice(0, limits.captionMaxLength).trim(), options: answers };
+}
+
+/**
+ * Ask for a poll, in whichever request shape this endpoint accepts.
+ *
+ * The same two-shape story as {@link askForLine}, and it shares the latch: an endpoint
+ * that has already refused the rich shape goes straight to plain, whichever call found
+ * that out. The difference is only in the reading — a schema on one side, the first
+ * line and the rest on the other.
+ */
+async function askForPoll(
+  endpoint: Live,
+  model: string,
+  content: Anthropic.Beta.Messages.BetaContentBlockParam[],
+): Promise<GeneratedPoll | null> {
+  if (!endpoint.plainShape) {
+    try {
+      const message = await endpoint.client.beta.messages.parse({
+        ...REQUEST_BASE,
+        model,
+        system: systemBlocks(),
+        output_config: {
+          effort: OUTPUT_EFFORT,
+          format: zodOutputFormat(PollSchema),
+        },
+        messages: [{ role: "user", content }],
+      });
+
+      if (message.stop_reason === "refusal") return null;
+      const parsed = message.parsed_output as {
+        question?: unknown;
+        options?: unknown;
+      } | null;
+      return cleanPoll(
+        parsed?.question,
+        Array.isArray(parsed?.options) ? parsed.options : [],
+      );
+    } catch (err) {
+      if (!unsupportedShape(err)) throw err;
+      endpoint.plainShape = true;
+      console.warn(
+        "[bakchod-ai] endpoint refused the rich request shape; sending plain messages from here on:",
+        err,
+      );
+    }
+  }
+
+  const message = await endpoint.client.messages.create({
+    model,
+    max_tokens: REQUEST_BASE.max_tokens,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...(content as Anthropic.ContentBlockParam[]),
+          { type: "text", text: POLL_PLAIN_INSTRUCTION },
+        ],
+      },
+    ],
+  });
+
+  if (message.stop_reason === "refusal") return null;
+
+  const lines = message.content
+    .filter((block): block is Anthropic.TextBlock => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .split("\n")
+    .map(stripMarker)
+    .filter((line) => line.length > 0);
+
+  return cleanPoll(lines[0], lines.slice(1));
+}
+
 /**
  * Ask each configured gateway in turn, until one of them answers.
  *
@@ -335,25 +493,20 @@ async function askForLine<S extends z.ZodType>(
  *
  * Null out of here therefore means one of three things, all of which the callers answer
  * the same way: nothing is configured, the model declined, or every endpoint is down.
+ *
+ * Generic in what is being asked for, because a poll comes back as an object and a
+ * roast as a string, and which of those it is has nothing to do with failover.
  */
-async function askAcrossEndpoints<S extends z.ZodType>(
+async function acrossEndpoints<T>(
   settings: BotSettings,
-  schema: S,
-  field: string,
-  content: Anthropic.Beta.Messages.BetaContentBlockParam[],
-): Promise<string | null> {
+  ask: (endpoint: Live, model: string) => Promise<T | null>,
+): Promise<T | null> {
   for (const candidate of settings.candidates) {
     try {
-      const line = await askForLine(
-        clientFor(candidate),
-        candidate.model,
-        schema,
-        field,
-        content,
-      );
+      const answer = await ask(clientFor(candidate), candidate.model);
       // Stamped even for a refusal: the gateway answered, which is all this records.
       await recordEndpointOk(candidate.id);
-      return line;
+      return answer;
     } catch (err) {
       // Not an endpoint problem, and not something a different gateway will answer
       // differently. `isRecoverable` is deliberately broad, so this is close to "somebody
@@ -368,6 +521,18 @@ async function askAcrossEndpoints<S extends z.ZodType>(
   return null;
 }
 
+/** One line, from whichever gateway answers first. */
+function askAcrossEndpoints<S extends z.ZodType>(
+  settings: BotSettings,
+  schema: S,
+  field: string,
+  content: Anthropic.Beta.Messages.BetaContentBlockParam[],
+): Promise<string | null> {
+  return acrossEndpoints(settings, (endpoint, model) =>
+    askForLine(endpoint, model, schema, field, content),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Generation
 // ---------------------------------------------------------------------------
@@ -377,6 +542,8 @@ interface PostContext {
   caption: string | null;
   tweetText: string | null;
   authorName: string;
+  /** A poll's answers, so a comment on one can react to the choices on offer. */
+  options?: string[] | null;
   /** Cached derivative, for the vision path. */
   image?: { data: string; mediaType: "image/webp" | "image/jpeg" } | null;
 }
@@ -385,6 +552,9 @@ function describePost(ctx: PostContext): string {
   const lines = [`Poster: ${ctx.authorName}`, `Type: ${ctx.kind}`];
   if (ctx.caption) lines.push(`Caption: ${ctx.caption}`);
   if (ctx.tweetText) lines.push(`Tweet text: ${ctx.tweetText}`);
+  if (ctx.options?.length) {
+    lines.push(`It is a poll. The caption is the question, and the options are: ${ctx.options.join(" / ")}`);
+  }
   if (ctx.image) lines.push("The image is attached — react to what you can see in it.");
   if (ctx.kind === "VIDEO") lines.push("This is a video; the attached image is its first frame.");
   if (ctx.kind === "AUDIO") lines.push("This is an audio clip, so you cannot hear it. React to the caption only.");
@@ -417,24 +587,49 @@ export async function generateComment(
   );
 }
 
+/** What the feed has been saying, for whichever prompt wants the room's temperature. */
+function feedFlavour(recentCaptions: string[]): string {
+  return recentCaptions.length > 0
+    ? `For flavour, here is what the feed has been posting lately — do not repeat these, just match the energy:\n${recentCaptions
+        .map((c) => `- ${c}`)
+        .join("\n")}`
+    : "The feed is quiet right now.";
+}
+
 export async function generatePostText(
   settings: BotSettings,
   recentCaptions: string[],
 ): Promise<string> {
-  const context =
-    recentCaptions.length > 0
-      ? `For flavour, here is what the feed has been posting lately — do not repeat these, just match the energy:\n${recentCaptions
-          .map((c) => `- ${c}`)
-          .join("\n")}`
-      : "The feed is quiet right now.";
-
   const line = await askAcrossEndpoints(settings, PostSchema, "tweetText", [
     {
       type: "text",
-      text: `Write your own post for the feed — an observation, a fake confession, or a challenge to the other bakchods. Original, not a reply.\n\n${context}`,
+      text: `Write your own post for the feed — an observation, a fake confession, or a challenge to the other bakchods. Original, not a reply.\n\n${feedFlavour(recentCaptions)}`,
     },
   ]);
   return line ?? pick(CANNED_POSTS);
+}
+
+/**
+ * A poll for the feed, or null to skip it.
+ *
+ * Deliberately no canned fallback, for the reason {@link generateCardLine} has none
+ * and more so: a canned poll is a fixed set of buttons, and once the feed has answered
+ * it once, asking it again is asking a question whose answer is already on the site.
+ * The caller posts a line instead, so rule 2 is kept without the bot repeating itself
+ * in the one format that shows its repetition as numbers.
+ */
+export async function generatePoll(
+  settings: BotSettings,
+  recentCaptions: string[],
+): Promise<GeneratedPoll | null> {
+  return acrossEndpoints(settings, (endpoint, model) =>
+    askForPoll(endpoint, model, [
+      {
+        type: "text",
+        text: `Run a poll on the feed: one question, and ${limits.pollMinOptions} to ${limits.pollMaxOptions} answers people pick between. Something this group would actually argue about — not a quiz, and not a question with one obviously right answer.\n\n${feedFlavour(recentCaptions)}`,
+      },
+    ]),
+  );
 }
 
 /** What each layout is asking for, in one clause. The look is in `./card`. */
@@ -514,6 +709,13 @@ async function loadImageFor(
   }
 }
 
+/**
+ * Exported for `test/ai-poll.test.ts`, which asserts what a model's answer is allowed
+ * to turn into. Everything reachable from here is pure — no client, no settings row —
+ * which is the whole reason the parsing lives in its own functions.
+ */
+export const __pollInternals = { cleanPoll, stripMarker };
+
 export interface TickResult {
   commented: number;
   posted: boolean;
@@ -568,6 +770,7 @@ export async function runBakchodTick(): Promise<TickResult> {
             posterIv: true,
             posterTag: true,
             author: { select: { displayName: true } },
+            pollOptions: { select: { label: true }, orderBy: { position: "asc" } },
           },
         });
 
@@ -579,6 +782,7 @@ export async function runBakchodTick(): Promise<TickResult> {
         caption: post.caption,
         tweetText: post.tweetText,
         authorName: post.author.displayName,
+        options: post.pollOptions.map((o) => o.label),
         image: await loadImageFor(post),
       });
       await addComment(bot, post.id, comment, true);
@@ -627,10 +831,30 @@ export async function runBakchodTick(): Promise<TickResult> {
           .map((r) => r.caption ?? r.tweetText)
           .filter((c): c is string => Boolean(c));
 
-        await createPost({
-          author: bot,
-          tweetText: await generatePostText(settings, captions),
-        });
+        // Rolled only among the posts that are not cards, which is what makes these
+        // two percentages an order rather than two shares somebody has to keep adding
+        // up to 100. Null here — no key, a refusal, or an answer that was not a poll —
+        // falls through to a line, so a poll is never the reason the slot goes empty.
+        const poll =
+          Math.random() * 100 < settings.pollPercent
+            ? await generatePoll(settings, captions)
+            : null;
+
+        if (poll) {
+          // Through the same `createPost` a person's poll goes through, which is where
+          // the rule lives: voting writes no rating, no aggregate and no total, so the
+          // house account can ask the feed a question with nothing scored either way.
+          await createPost({
+            author: bot,
+            caption: poll.question,
+            pollOptions: poll.options,
+          });
+        } else {
+          await createPost({
+            author: bot,
+            tweetText: await generatePostText(settings, captions),
+          });
+        }
       }
       posted = true;
     } catch (err) {

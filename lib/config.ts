@@ -139,6 +139,18 @@ export const limits = {
   /** Disk cache ceiling; least-recently-used entries are evicted past this. */
   cacheMaxBytes: 2 * 1024 * 1024 * 1024, // 2 GB
 
+  // ── Polls ────────────────────────────────────────────────────────────────
+  /**
+   * How many options a poll may carry. Two is the smallest thing that is still a
+   * question; four is what fits on a phone without the card becoming a form.
+   *
+   * The question itself is the post's caption, so it is bounded by
+   * `captionMaxLength` and needs no limit of its own.
+   */
+  pollMinOptions: 2,
+  pollMaxOptions: 4,
+  pollOptionMaxLength: 80,
+
   // ── Profile customisation ────────────────────────────────────────────────
   taglineMaxLength: 80,
   bioMaxLength: 300,
@@ -219,6 +231,21 @@ export const rateLimits = {
    * viewer could no longer post.
    */
   storyView: { max: 600, windowSec: 3600 },
+  /**
+   * Answering a poll. Sized like `rate` and then doubled: a poll is one tap where a
+   * rating is a considered number, so a reader gets through more of them per hour.
+   */
+  pollVote: { max: 120, windowSec: 3600 },
+  /**
+   * Reporting feed posts as seen. Its own bucket, and the widest one here, for the
+   * same reason `storyView` has one: this fires as a side effect of scrolling, so
+   * running out would have to be silent, and any budget a normal session can
+   * exhaust turns the For You ranker back into the thing it replaced.
+   *
+   * The meter counts *requests*, not posts — the client batches a screenful into one
+   * call — so this is thousands of posts an hour, not twelve hundred.
+   */
+  seen: { max: 1200, windowSec: 3600 },
   /** Follower edges. Following 30 strangers an hour is enough for anyone. */
   follow: { max: 30, windowSec: 3600 },
   /** Private messages — a fast talker, but not a firehose. */

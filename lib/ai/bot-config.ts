@@ -21,14 +21,19 @@ export const BOT_DEFAULTS = {
   postIntervalMinutes: 360,
   /** Two in five of its own posts are a rendered card rather than a line of text. */
   cardPercent: 40,
+  /**
+   * And of the ones that are not cards, three in ten are a poll rather than a line.
+   * Applied after the card roll, so this is a share of the rest — not of everything.
+   */
+  pollPercent: 30,
 } as const;
 
 /**
  * Ranges the form and the API both enforce.
  *
  * The floors are all zero or near it because switching one behaviour off is a
- * legitimate setting: no comments, no cards, no delay. The ceilings exist so a
- * fat-fingered paste cannot turn the bot into a load generator or park its next
+ * legitimate setting: no comments, no cards, no polls, no delay. The ceilings exist so
+ * a fat-fingered paste cannot turn the bot into a load generator or park its next
  * post beyond the heat death of the feed.
  */
 export const BOT_BOUNDS = {
@@ -36,6 +41,7 @@ export const BOT_BOUNDS = {
   maxCommentsPerTick: { min: 0, max: 20 },
   postIntervalMinutes: { min: 5, max: 20160 },
   cardPercent: { min: 0, max: 100 },
+  pollPercent: { min: 0, max: 100 },
 } as const;
 
 type BoundedKey = keyof typeof BOT_BOUNDS;
@@ -49,6 +55,7 @@ export const BotTuningSchema = z.object({
   maxCommentsPerTick: bounded("maxCommentsPerTick"),
   postIntervalMinutes: bounded("postIntervalMinutes"),
   cardPercent: bounded("cardPercent"),
+  pollPercent: bounded("pollPercent"),
 });
 
 export type BotTuning = z.infer<typeof BotTuningSchema>;

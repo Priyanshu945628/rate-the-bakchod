@@ -134,6 +134,7 @@ export async function loadBotSettings(): Promise<BotSettings> {
     maxCommentsPerTick: row?.maxCommentsPerTick ?? BOT_DEFAULTS.maxCommentsPerTick,
     postIntervalMinutes: row?.postIntervalMinutes ?? BOT_DEFAULTS.postIntervalMinutes,
     cardPercent: row?.cardPercent ?? BOT_DEFAULTS.cardPercent,
+    pollPercent: row?.pollPercent ?? BOT_DEFAULTS.pollPercent,
     candidates,
   };
 }
@@ -161,6 +162,7 @@ export async function readBotStatus(): Promise<BotStatus> {
     maxCommentsPerTick: row?.maxCommentsPerTick ?? BOT_DEFAULTS.maxCommentsPerTick,
     postIntervalMinutes: row?.postIntervalMinutes ?? BOT_DEFAULTS.postIntervalMinutes,
     cardPercent: row?.cardPercent ?? BOT_DEFAULTS.cardPercent,
+    pollPercent: row?.pollPercent ?? BOT_DEFAULTS.pollPercent,
     apiKey: sourceOf(stored, serverEnv.anthropicKey),
     baseUrl: sourceOf(row?.baseUrl ?? null, serverEnv.anthropicBaseUrl),
     // `bakchodModel` always answers, so "unset" would be a lie — an unsaved model is

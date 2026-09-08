@@ -21,6 +21,9 @@ enum PostKind {
   VIDEO
   AUDIO
   TWEET
+  /// A question with fixed options. No media, no `tweetText` — the question is
+  /// the caption, and the options live in `PollOption`.
+  POLL
 }
 
 enum ArchiveState {
@@ -127,6 +130,11 @@ model User {
   comments   Comment[]
   reports    Report[]
   rateLimits RateLimit[]
+
+  pollVotes PollVote[]
+  /// Which feed posts this user has already had on screen. Read by the For You
+  /// ranker, which will not put a post it finds here back at the top.
+  postViews PostView[]
 
   /// Absent until the user customises something. No row means a stock profile,
   /// which is what the AI account has.
@@ -515,6 +523,14 @@ model Post {
   comments Comment[]
   reports  Report[]
 
+  /// Only ever populated on a POLL post.
+  pollOptions PollOption[]
+  pollVotes   PollVote[]
+
+  /// Who has already had this post on screen. Cheap to write, and the whole
+  /// input to "do not show me this again at the top".
+  views PostView[]
+
   storyViews    StoryView[]
   /// Back-relation for ProfileTheme.pinnedPost — a deleted post un-pins itself.
   pinnedByTheme ProfileTheme?
@@ -548,6 +564,69 @@ model Rating {
   @@unique([postId, raterId])
   @@index([postId])
   @@index([createdAt])
+}
+
+/// One choice on a POLL post.
+///
+/// `position` rather than an implicit order, so the list a voter reads is the
+/// list the author typed — sorting by `votesCount` would reshuffle the options
+/// under someone mid-vote.
+model PollOption {
+  id     String @id @default(cuid())
+  postId String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  label    String @db.VarChar(80)
+  position Int
+
+  /// Denormalised tally, written in the same transaction as the vote. The card
+  /// shows every option's share on every render, so counting rows per option
+  /// would be one query per option per post per page.
+  votesCount Int @default(0)
+
+  votes PollVote[]
+
+  @@unique([postId, position])
+  @@index([postId])
+}
+
+/// One person's answer. `@@unique([postId, voterId])` is the one-vote rule, and
+/// `postId` is carried alongside `optionId` so that rule is a database
+/// constraint rather than a join the vote path has to remember to make.
+model PollVote {
+  id       String     @id @default(cuid())
+  postId   String
+  post     Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  optionId String
+  option   PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  voterId  String
+  voter    User       @relation(fields: [voterId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([postId, voterId])
+  @@index([optionId])
+}
+
+/// A feed post that has been on a signed-in viewer's screen.
+///
+/// No surrogate id, like `Follow`: nothing ever points at one of these, and the
+/// pair *is* the fact. There is one row per (post, viewer) forever — the write
+/// is an upsert that does nothing on conflict, so re-scrolling costs an index
+/// probe rather than a row.
+///
+/// `seenAt` is what makes already-seen posts orderable, which is how the fallback
+/// tier can be "the ones you saw longest ago" instead of an unordered leftover pile.
+model PostView {
+  postId   String
+  post     Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  viewerId String
+  viewer   User   @relation(fields: [viewerId], references: [id], onDelete: Cascade)
+
+  seenAt DateTime @default(now())
+
+  @@id([postId, viewerId])
+  @@index([viewerId, seenAt(sort: Desc)])
 }
 
 model Comment {
@@ -617,6 +696,10 @@ model BotSetting {
   postIntervalMinutes Int @default(360)
   /// What share of its own posts are rendered cards rather than text, 0-100.
   cardPercent Int @default(40)
+  /// What share of the posts that are *not* cards are polls, 0-100. Two knobs in
+  /// order rather than three shares that have to add up: the card roll happens
+  /// first, and this one decides what the rest of them are.
+  pollPercent Int @default(30)
 
   /// The sealed API key. Null on any of the six columns means: use the environment.
   secretCipher Bytes?

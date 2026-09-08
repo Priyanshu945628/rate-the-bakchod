@@ -47,7 +47,7 @@ export async function GET(request: Request) {
   }
 }
 
-/** New post. Multipart: `file` and/or `tweetText`, plus optional `caption`. */
+/** New post. Multipart: `file`, `tweetText`, `caption`, repeated `pollOption`. */
 export async function POST(request: Request) {
   const auth = await authorizeWrite("upload");
   if ("response" in auth) return auth.response;
@@ -57,6 +57,9 @@ export async function POST(request: Request) {
     const caption = form.get("caption");
     const tweetText = form.get("tweetText");
     const file = form.get("file");
+    // Repeated rather than one delimited field: an option is free text, and any
+    // separator picked here would be a character nobody could put in an answer.
+    const pollOptions = form.getAll("pollOption").filter((v) => typeof v === "string");
 
     let buffer: Buffer | null = null;
     if (file instanceof File && file.size > 0) {
@@ -83,6 +86,7 @@ export async function POST(request: Request) {
       author: official ? await ensureOfficialUser() : auth.user,
       caption: typeof caption === "string" ? caption : null,
       tweetText: typeof tweetText === "string" ? tweetText : null,
+      pollOptions: pollOptions.length > 0 ? pollOptions : null,
       file: buffer,
       official,
     });

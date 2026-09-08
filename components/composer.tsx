@@ -2,14 +2,23 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { limits } from "@/lib/config";
 import type { ClientViewer } from "@/lib/types";
-import { ClipIcon, SpinnerIcon, XIcon } from "./icons";
+import { ClipIcon, PollIcon, SpinnerIcon, XIcon } from "./icons";
 import { SignInPrompt } from "./sign-in-prompt";
 
-const MAX_BYTES = 100 * 1024 * 1024;
+const MAX_MB = Math.round(limits.maxUploadBytes / 1048576);
+
+/** One empty box per allowed option, so opening the poll never needs an "add" button. */
+const EMPTY_OPTIONS = Array.from({ length: limits.pollMaxOptions }, () => "");
 
 /**
  * Post composer.
+ *
+ * One box for the words, and what they become depends on what is attached: with a
+ * file they are the caption, without one they are the post. There is no separate
+ * "paste a tweet" field — a post with nothing but text is the ordinary case, not a
+ * special mode you have to switch into.
  *
  * The upload returns as soon as the file is encrypted and cached — the archive
  * push happens behind it — so `router.refresh()` right after is enough to show
@@ -17,7 +26,8 @@ const MAX_BYTES = 100 * 1024 * 1024;
  *
  * `official` is the admin panel's copy of this. It sends one extra field and the
  * route ignores that field for everyone who is not an admin, so this prop is a
- * label rather than a permission.
+ * label rather than a permission. Announcements cannot be polls: an update the
+ * platform is publishing is not a question it is asking.
  */
 export function Composer({
   viewer,
@@ -32,9 +42,9 @@ export function Composer({
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const previewRef = useRef<string | null>(null);
-  const [caption, setCaption] = useState("");
-  const [tweetText, setTweetText] = useState("");
-  const [showTweet, setShowTweet] = useState(false);
+  const [text, setText] = useState("");
+  const [pollOpen, setPollOpen] = useState(false);
+  const [options, setOptions] = useState<string[]>(EMPTY_OPTIONS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,8 +69,8 @@ export function Composer({
 
   function pick(next: File | null) {
     setError(null);
-    if (next && next.size > MAX_BYTES) {
-      setError("That file is over 100 MB. Trim it down.");
+    if (next && next.size > limits.maxUploadBytes) {
+      setError(`That file is over ${MAX_MB} MB. Trim it down.`);
       return;
     }
 
@@ -70,6 +80,9 @@ export function Composer({
       next && next.type.startsWith("image/") ? URL.createObjectURL(next) : null;
     setPreview(previewRef.current);
     setFile(next);
+    // Attaching something is the other half of `togglePoll`: a poll cannot carry a
+    // file, so picking one closes the poll.
+    if (next) setPollOpen(false);
   }
 
   function clearFile() {
@@ -77,28 +90,52 @@ export function Composer({
     if (fileRef.current) fileRef.current.value = "";
   }
 
-  async function submit() {
-    const text = caption.trim();
-    // An announcement is one field. A post with no file has to carry its words in
-    // `tweetText` — that is what the API accepts as a bodied post with no upload —
-    // so the same text goes to whichever field this post shape has room for.
-    const fields = official
-      ? { caption: file ? text : "", tweetText: file ? "" : text }
-      : { caption: text, tweetText: tweetText.trim() };
+  function togglePoll() {
+    setError(null);
+    const opening = !pollOpen;
+    setPollOpen(opening);
+    // A poll carries no file and a file cancels a poll, so whichever one is being
+    // turned on clears the other here rather than letting the server refuse a
+    // state this box allowed you to build.
+    if (opening) clearFile();
+    else setOptions(EMPTY_OPTIONS);
+  }
 
-    if (!file && !fields.tweetText) {
-      setError(official ? "Write the update first." : "Attach something, or paste a tweet.");
+  function setOption(index: number, value: string) {
+    setOptions((prev) => prev.map((o, i) => (i === index ? value : o)));
+  }
+
+  async function submit() {
+    const words = text.trim();
+    const filled = pollOpen ? options.map((o) => o.trim()).filter(Boolean) : [];
+
+    if (pollOpen) {
+      if (!words) {
+        setError("Ask the question first.");
+        return;
+      }
+      if (filled.length < limits.pollMinOptions) {
+        setError(`A poll needs at least ${limits.pollMinOptions} options.`);
+        return;
+      }
+    } else if (!file && !words) {
+      setError(official ? "Write the update first." : "Write something, or attach a file.");
       return;
     }
+
     setBusy(true);
     setError(null);
 
     try {
       const form = new FormData();
       if (file) form.set("file", file);
-      if (fields.caption) form.set("caption", fields.caption);
-      if (fields.tweetText) form.set("tweetText", fields.tweetText);
       if (official) form.set("official", "1");
+      for (const option of filled) form.append("pollOption", option);
+
+      // Where the words go is the one thing this box decides for you. A poll's
+      // question and a caption under a file are both `caption`; on their own they
+      // are the post itself, which the API takes as `tweetText`.
+      if (words) form.set(file || pollOpen ? "caption" : "tweetText", words);
 
       const res = await fetch("/api/posts", { method: "POST", body: form });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -108,9 +145,9 @@ export function Composer({
       }
 
       clearFile();
-      setCaption("");
-      setTweetText("");
-      setShowTweet(false);
+      setText("");
+      setOptions(EMPTY_OPTIONS);
+      setPollOpen(false);
       router.refresh();
     } catch {
       setError("Upload failed on the way out. Try again.");
@@ -122,25 +159,38 @@ export function Composer({
   return (
     <div className="panel px-4 py-4 shadow-card">
       <textarea
-        value={caption}
-        onChange={(e) => setCaption(e.target.value)}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
         rows={official ? 4 : 2}
-        // 500 either way: with a file attached these words become the caption, and
-        // that is the shorter of the two server-side caps.
+        // 500 either way: attached to a file or a poll these words become the
+        // caption, and that is the shorter of the two server-side caps.
         maxLength={500}
-        placeholder={official ? "What changed." : "What did this bakchod do?"}
+        placeholder={
+          official
+            ? "What changed."
+            : pollOpen
+              ? "Ask something."
+              : "What did this bakchod do?"
+        }
         className="w-full resize-y rounded-ctl border border-line bg-panel-2 px-3 py-2.5 text-[15px] text-ink placeholder:text-faint"
       />
 
-      {showTweet && !official && (
-        <textarea
-          value={tweetText}
-          onChange={(e) => setTweetText(e.target.value)}
-          rows={3}
-          maxLength={600}
-          placeholder="Paste the tweet text here…"
-          className="mt-2 w-full resize-y rounded-ctl border border-line bg-panel-2 px-3 py-2.5 text-sm text-ink placeholder:text-faint"
-        />
+      {pollOpen && (
+        <div className="mt-2 space-y-2">
+          {options.map((option, i) => (
+            <input
+              key={i}
+              value={option}
+              onChange={(e) => setOption(i, e.target.value)}
+              maxLength={limits.pollOptionMaxLength}
+              aria-label={`Option ${i + 1}`}
+              placeholder={
+                i < limits.pollMinOptions ? `Option ${i + 1}` : `Option ${i + 1} (optional)`
+              }
+              className="w-full rounded-ctl border border-line bg-panel-2 px-3 py-2 text-sm text-ink placeholder:text-faint"
+            />
+          ))}
+        </div>
       )}
 
       {file && (
@@ -194,10 +244,16 @@ export function Composer({
         {!official && (
           <button
             type="button"
-            onClick={() => setShowTweet((v) => !v)}
-            className="h-9 rounded-ctl border border-line px-3 text-xs font-medium text-muted transition-colors hover:border-line-strong hover:text-ink"
+            onClick={togglePoll}
+            aria-pressed={pollOpen}
+            className={`flex h-9 items-center gap-2 rounded-ctl border px-3 text-xs font-medium transition-colors ${
+              pollOpen
+                ? "border-line-strong bg-panel-3 text-ink"
+                : "border-line text-muted hover:border-line-strong hover:text-ink"
+            }`}
           >
-            {showTweet ? "Drop tweet text" : "Paste a tweet"}
+            <PollIcon className="h-4 w-4" />
+            Poll
           </button>
         )}
 
@@ -213,11 +269,6 @@ export function Composer({
       </div>
 
       {error && <p className="mt-2 text-xs text-danger">{error}</p>}
-      {busy && (
-        <p className="mt-2 text-xs text-faint">
-          Stripping metadata, re-encoding and encrypting. Big videos take a moment.
-        </p>
-      )}
     </div>
   );
 }

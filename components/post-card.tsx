@@ -20,6 +20,7 @@ import {
 } from "./icons";
 import { CommentThread } from "./comment-thread";
 import { MediaView } from "./media-view";
+import { PollView } from "./poll-view";
 import { RatePanel } from "./rate-panel";
 import { TimeAgo } from "./time-ago";
 
@@ -92,6 +93,8 @@ export function PostCard({
   const canEditTweet = post.kind === "TWEET" && post.tweetText !== null;
   /** With no media, the words are the whole post and cannot be emptied. */
   const needsTweet = canEditTweet && !post.mediaUrl && tweetDraft.trim().length === 0;
+  /** Same rule on a poll, whose question is its caption. The server refuses it too. */
+  const needsQuestion = post.kind === "POLL" && draft.trim().length === 0;
 
   async function sendReport() {
     const reason = reportReason.trim();
@@ -290,12 +293,12 @@ export function PostCard({
         <div className="px-4 pb-3">
           <EditField
             id={`caption-${post.id}`}
-            label="Caption"
+            label={post.kind === "POLL" ? "Question" : "Caption"}
             value={draft}
             onChange={setDraft}
             max={limits.captionMaxLength}
             rows={3}
-            placeholder="Say what happened."
+            placeholder={post.kind === "POLL" ? "Ask something." : "Say what happened."}
           />
           {canEditTweet && (
             <EditField
@@ -312,7 +315,7 @@ export function PostCard({
             <button
               type="button"
               onClick={() => void saveEdits()}
-              disabled={saving || needsTweet}
+              disabled={saving || needsTweet || needsQuestion}
               className="flex h-9 items-center gap-2 rounded-ctl bg-accent px-4 text-sm font-semibold text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {saving && <SpinnerIcon className="h-4 w-4 animate-spin" />}
@@ -343,6 +346,10 @@ export function PostCard({
           {post.tweetText}
         </blockquote>
       )}
+
+      {/* A poll's question is the caption above; these are its answers. Never on a
+          tombstone — that branch returned before this. */}
+      {post.poll && <PollView postId={post.id} poll={post.poll} viewer={viewer} />}
 
       <RatePanel
         post={post}

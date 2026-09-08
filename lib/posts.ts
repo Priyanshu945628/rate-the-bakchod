@@ -86,6 +86,52 @@ function cleanTweetText(raw: string | null | undefined): string | null {
   return trimmed;
 }
 
+/**
+ * The answers on a POLL post.
+ *
+ * Blank entries are dropped rather than refused: the composer renders
+ * `pollMaxOptions` boxes, and a poll with two answers should not have to be a poll
+ * with four. Duplicates are dropped case-insensitively — two identical buttons split
+ * one answer's votes, which makes the result *wrong* rather than merely untidy.
+ *
+ * Returns null for "this is not a poll", which is what lets the same field be absent,
+ * empty, or an array of blanks without any of them meaning three different things.
+ */
+export function cleanPollOptions(
+  raw: readonly unknown[] | null | undefined,
+): string[] | null {
+  if (!raw) return null;
+
+  const seen = new Set<string>();
+  const options: string[] = [];
+  for (const entry of raw) {
+    const label = (typeof entry === "string" ? entry : "").trim();
+    if (!label) continue;
+    if (label.length > limits.pollOptionMaxLength) {
+      throw new PostServiceError(
+        `An option is too long (max ${limits.pollOptionMaxLength} characters).`,
+      );
+    }
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    options.push(label);
+  }
+
+  if (options.length === 0) return null;
+  if (options.length < limits.pollMinOptions) {
+    throw new PostServiceError(
+      `A poll needs at least ${limits.pollMinOptions} options.`,
+    );
+  }
+  if (options.length > limits.pollMaxOptions) {
+    throw new PostServiceError(
+      `A poll takes at most ${limits.pollMaxOptions} options.`,
+    );
+  }
+  return options;
+}
+
 export interface CreatePostInput {
   author: User;
   caption?: string | null;
@@ -93,6 +139,13 @@ export interface CreatePostInput {
   file?: Buffer | null;
   /** Pasted tweet text, for a TWEET post with no screenshot. */
   tweetText?: string | null;
+  /**
+   * Answers, which turn this into a POLL post. The question is `caption`.
+   *
+   * Blanks and duplicates are pruned before the count is checked, so what is
+   * counted is what a voter would actually see.
+   */
+  pollOptions?: readonly string[] | null;
   /**
    * Create this as a story instead of a feed post: it appears in the tray for
    * `limits.storyTtlMs`, is not rateable, and does not show up in the feed or in
@@ -111,17 +164,50 @@ export interface CreatePostInput {
 export async function createPost(input: CreatePostInput) {
   const caption = cleanCaption(input.caption);
   const tweetText = cleanTweetText(input.tweetText);
+  const pollOptions = cleanPollOptions(input.pollOptions);
   const isStory = input.story === true;
   // An announcement that vanishes in a day is not an announcement.
   const isOfficial = input.official === true && !isStory;
 
-  if (!input.file && !tweetText) {
-    throw new PostServiceError("Add a file or some tweet text.");
+  if (pollOptions) {
+    // A poll is a question and its answers, and each of these would make it
+    // something else: a file makes the card a piece of media with buttons under
+    // it, a story expires before it can be answered, and without a question the
+    // options are captionless buttons.
+    if (input.file) throw new PostServiceError("A poll cannot carry a file.");
+    if (isStory) throw new PostServiceError("A poll cannot be a story.");
+    if (!caption) throw new PostServiceError("A poll needs its question.");
+  } else if (!input.file && !tweetText) {
+    throw new PostServiceError("Write something, or attach a file.");
   }
+
   // A text-only story would be a tweet nobody can rate that vanishes in a day.
   // The DB's story/expiry CHECK constraint would accept it; the product should not.
   if (isStory && !input.file) {
     throw new PostServiceError("A story needs an image, video or clip.");
+  }
+
+  // Poll: no bytes, and the options are written in the same statement as the post,
+  // so a poll can never exist for an instant with nothing to vote on.
+  if (pollOptions) {
+    const post = await prisma.post.create({
+      data: {
+        authorId: input.author.id,
+        kind: "POLL",
+        caption,
+        isOfficial,
+        archiveState: "VERIFIED",
+        pollOptions: {
+          create: pollOptions.map((label, position) => ({ label, position })),
+        },
+      },
+    });
+    void notifyMentions({
+      text: caption ?? "",
+      actorId: input.author.id,
+      postId: post.id,
+    });
+    return post;
   }
 
   // Text-only post: nothing to encrypt, nothing to archive.
@@ -323,6 +409,99 @@ export async function submitRating(rater: User, postId: string, value: number) {
 }
 
 // ---------------------------------------------------------------------------
+// Voting in a poll
+// ---------------------------------------------------------------------------
+
+export interface PollResult {
+  /** Every option's tally, in the author's order. */
+  options: { id: string; votes: number }[];
+  totalVotes: number;
+  viewerOptionId: string;
+}
+
+/**
+ * Answer a poll. One vote per person, and it can be moved but not withdrawn.
+ *
+ * Nothing here touches a score. A poll is a question, not a piece of bakchodi to be
+ * judged, so voting is deliberately not the rating path with a different verb: no
+ * post aggregate, no author aggregate, no global mean, and therefore nothing to
+ * exclude the AI from — the house account can run a poll and be answered without a
+ * single point being calculated anywhere.
+ *
+ * The whole thing is one transaction because a moved vote is three writes that have
+ * to agree: the old option comes down, the new one goes up, and the row is repointed.
+ * Two of them landing would leave a tally that does not add up to the votes cast.
+ */
+export async function submitPollVote(
+  voter: User,
+  postId: string,
+  optionId: string,
+): Promise<PollResult> {
+  return prisma.$transaction(async (tx) => {
+    // The option is looked up by id *and* post, which is what makes "vote for an
+    // option on someone else's poll" a 404 rather than a cross-poll write. Without
+    // the `postId` in the where, the unique-per-post rule would be enforced against
+    // a post the option does not belong to.
+    const option = await tx.pollOption.findFirst({
+      where: { id: optionId, postId, post: { ...FEED_SCOPE, modDeletedAt: null } },
+      select: { id: true },
+    });
+    if (!option) throw new PostServiceError("That option is not on this poll.", 404);
+
+    const existing = await tx.pollVote.findUnique({
+      where: { postId_voterId: { postId, voterId: voter.id } },
+      select: { id: true, optionId: true },
+    });
+
+    if (existing?.optionId === optionId) {
+      // Already where they wanted to be. Returning the tally rather than erroring:
+      // a double tap is the likeliest cause, and the answer to it is the result.
+      return pollResult(tx, postId, optionId);
+    }
+
+    if (existing) {
+      await tx.pollOption.update({
+        where: { id: existing.optionId },
+        data: { votesCount: { decrement: 1 } },
+      });
+      await tx.pollVote.update({
+        where: { id: existing.id },
+        data: { optionId },
+      });
+    } else {
+      await tx.pollVote.create({
+        data: { postId, optionId, voterId: voter.id },
+      });
+    }
+
+    await tx.pollOption.update({
+      where: { id: optionId },
+      data: { votesCount: { increment: 1 } },
+    });
+
+    return pollResult(tx, postId, optionId);
+  });
+}
+
+/** The tallies as they now stand, read inside the vote's own transaction. */
+async function pollResult(
+  tx: Prisma.TransactionClient,
+  postId: string,
+  viewerOptionId: string,
+): Promise<PollResult> {
+  const options = await tx.pollOption.findMany({
+    where: { postId },
+    orderBy: { position: "asc" },
+    select: { id: true, votesCount: true },
+  });
+  return {
+    options: options.map((o) => ({ id: o.id, votes: o.votesCount })),
+    totalVotes: options.reduce((n, o) => n + o.votesCount, 0),
+    viewerOptionId,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Comments and reports
 // ---------------------------------------------------------------------------
 
@@ -477,6 +656,12 @@ export async function editPost(
 
   const post = await ownPost(author, postId);
 
+  // A poll's question *is* its caption, so clearing it would leave a card that is
+  // nothing but unlabelled buttons — the same empty card the tweet branch refuses.
+  if (post.kind === "POLL" && "caption" in edit && data.caption === null) {
+    throw new PostServiceError("A poll needs its question.");
+  }
+
   if ("tweetText" in edit) {
     if (edit.tweetText !== null && typeof edit.tweetText !== "string") {
       throw new PostServiceError("Tweet text has to be text.");
@@ -590,11 +775,20 @@ const feedSelect = {
       theme: { select: { logoKey: true } },
     },
   },
+  // Empty on everything that is not a poll, so this costs one join and nothing else.
+  // Ordered here rather than in the renderer: the list a voter reads has to be the
+  // list the author typed, and sorting by tally would reshuffle it mid-vote.
+  pollOptions: {
+    select: { id: true, label: true, votesCount: true },
+    orderBy: { position: "asc" },
+  },
   _count: { select: { comments: true } },
 } satisfies Prisma.PostSelect;
 
 export type FeedPost = Prisma.PostGetPayload<{ select: typeof feedSelect }> & {
   viewerRating: number | null;
+  /** Which option the viewer picked. Always null on a post that is not a poll. */
+  viewerPollOptionId: string | null;
 };
 
 export interface FeedPage {
@@ -665,32 +859,73 @@ export async function fetchFeed(options: {
   const page = hasMore ? rows.slice(0, FEED_PAGE_SIZE) : rows;
 
   return {
-    posts: await attachViewerRatings(page, viewerId ?? null),
+    posts: await attachViewerState(page, viewerId ?? null),
     nextCursor: hasMore ? page[page.length - 1].id : null,
   };
 }
 
 /**
- * Fill in what the viewer already rated, in one query for the whole page.
+ * Fill in what the viewer already did to each post, in one round trip per page.
  *
- * One query rather than one per row, and its own function rather than two inline
+ * Two queries rather than two per row, and its own function rather than inline
  * copies — the ordinary tabs and the For You blend both need it, and two copies
  * would eventually disagree about whether an unrated post is `null` or `0`, which
  * the slider renders very differently.
  */
-async function attachViewerRatings(
+async function attachViewerState(
   rows: Prisma.PostGetPayload<{ select: typeof feedSelect }>[],
   viewerId: string | null,
 ): Promise<FeedPost[]> {
   if (!viewerId || rows.length === 0) {
-    return rows.map((p) => ({ ...p, viewerRating: null }));
+    return rows.map((p) => ({ ...p, viewerRating: null, viewerPollOptionId: null }));
   }
-  const mine = await prisma.rating.findMany({
-    where: { raterId: viewerId, postId: { in: rows.map((p) => p.id) } },
-    select: { postId: true, value: true },
-  });
-  const byPost = new Map(mine.map((r) => [r.postId, r.value]));
-  return rows.map((p) => ({ ...p, viewerRating: byPost.get(p.id) ?? null }));
+
+  // Polls are a minority of any page, so the vote lookup is skipped entirely rather
+  // than sent with an empty `in` — which Postgres would still plan and execute.
+  const pollIds = rows.filter((p) => p.pollOptions.length > 0).map((p) => p.id);
+
+  const [ratings, votes] = await Promise.all([
+    prisma.rating.findMany({
+      where: { raterId: viewerId, postId: { in: rows.map((p) => p.id) } },
+      select: { postId: true, value: true },
+    }),
+    pollIds.length > 0
+      ? prisma.pollVote.findMany({
+          where: { voterId: viewerId, postId: { in: pollIds } },
+          select: { postId: true, optionId: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const rated = new Map(ratings.map((r) => [r.postId, r.value]));
+  const voted = new Map(votes.map((v) => [v.postId, v.optionId]));
+  return rows.map((p) => ({
+    ...p,
+    viewerRating: rated.get(p.id) ?? null,
+    viewerPollOptionId: voted.get(p.id) ?? null,
+  }));
+}
+
+/** The same two lookups for a single post, where there is no page to batch across. */
+async function viewerStateFor(
+  postId: string,
+  viewerId: string | null | undefined,
+): Promise<{ viewerRating: number | null; viewerPollOptionId: string | null }> {
+  if (!viewerId) return { viewerRating: null, viewerPollOptionId: null };
+  const [rating, vote] = await Promise.all([
+    prisma.rating.findUnique({
+      where: { postId_raterId: { postId, raterId: viewerId } },
+      select: { value: true },
+    }),
+    prisma.pollVote.findUnique({
+      where: { postId_voterId: { postId, voterId: viewerId } },
+      select: { optionId: true },
+    }),
+  ]);
+  return {
+    viewerRating: rating?.value ?? null,
+    viewerPollOptionId: vote?.optionId ?? null,
+  };
 }
 
 /**
@@ -735,7 +970,7 @@ export async function searchPosts(options: {
   const page = hasMore ? rows.slice(0, FEED_PAGE_SIZE) : rows;
 
   return {
-    posts: await attachViewerRatings(page, viewerId ?? null),
+    posts: await attachViewerState(page, viewerId ?? null),
     nextCursor: hasMore ? page[page.length - 1].id : null,
   };
 }
@@ -755,24 +990,20 @@ export async function searchPosts(options: {
  */
 const FOR_YOU_MAX = 240;
 
-/** How far into the discovery pool a session may start. */
-const DISCOVERY_ROTATE = 12;
-
 /**
  * Where a For You reader is, encoded opaquely.
  *
- * `seed` fixes which slice of the discovery pool this session sees, so two people
- * with the same follow graph do not get the same strangers, and reloading the page
- * shows different new faces. `offset` is how many blended posts have been handed
- * out. Both have to travel together — an offset applied to a different seed would
- * be pointing into a different list.
+ * Just the offset: how many blended posts have been handed out. It used to carry a
+ * random seed as well, which fixed how far into a globally `hotScore`-ranked
+ * discovery pool the session started — that was how two people with the same follow
+ * graph avoided seeing the same strangers. `PostView` makes it unnecessary. Discovery
+ * is now per-viewer by construction and advances on its own, so a seed would only
+ * hide the newest posts, which is the opposite of what it was for.
  *
- * Base64 rather than `seed:offset` so it reads as a cursor and nobody is tempted
- * to hand-edit one; it is obfuscation, not security, and there is nothing secret
- * in it.
+ * Base64 rather than a bare number so it reads as a cursor and nobody is tempted to
+ * hand-edit one; it is obfuscation, not security, and there is nothing secret in it.
  */
 interface ForYouCursor {
-  seed: number;
   offset: number;
 }
 
@@ -781,27 +1012,22 @@ function encodeForYouCursor(state: ForYouCursor): string {
 }
 
 /**
- * Decode a cursor, or start a fresh session.
+ * Decode a cursor, or start at the top.
  *
- * Anything unparseable becomes a new session at offset 0 rather than an error: a
- * truncated or stale cursor should show someone the top of their feed, not a
- * failure.
+ * Anything unparseable becomes offset 0 rather than an error: a truncated or stale
+ * cursor should show someone the top of their feed, not a failure. A cursor minted
+ * before the seed was dropped still decodes — its extra key is simply ignored.
  */
 function decodeForYouCursor(raw: string | null | undefined): ForYouCursor {
-  const fresh = { seed: Math.floor(Math.random() * 1_000_000), offset: 0 };
-  if (!raw) return fresh;
+  if (!raw) return { offset: 0 };
   try {
     const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as unknown;
-    if (parsed === null || typeof parsed !== "object") return fresh;
-    const { seed, offset } = parsed as Record<string, unknown>;
-    if (typeof seed !== "number" || typeof offset !== "number") return fresh;
-    if (!Number.isFinite(seed) || !Number.isFinite(offset)) return fresh;
-    return {
-      seed: Math.abs(Math.trunc(seed)) % 1_000_000,
-      offset: Math.min(Math.max(Math.trunc(offset), 0), FOR_YOU_MAX),
-    };
+    if (parsed === null || typeof parsed !== "object") return { offset: 0 };
+    const { offset } = parsed as Record<string, unknown>;
+    if (typeof offset !== "number" || !Number.isFinite(offset)) return { offset: 0 };
+    return { offset: Math.min(Math.max(Math.trunc(offset), 0), FOR_YOU_MAX) };
   } catch {
-    return fresh;
+    return { offset: 0 };
   }
 }
 
@@ -824,9 +1050,8 @@ export interface FeedPool<T> {
 /**
  * Interleave the three pools at the configured ratio.
  *
- * Pure and deterministic — the randomness in For You is entirely in which slice
- * of `discovery` the caller fetched, never in here — so the same three pools
- * always blend to the same list.
+ * Pure and deterministic — nothing in here is random, and nothing in For You is
+ * either — so the same three pools always blend to the same list.
  *
  * `fresh` is not a third voice in the ratio; it is the backstop. When the pool a
  * slot asked for is genuinely empty the slot is filled from whatever is left, so a
@@ -907,24 +1132,40 @@ function toPool<T>(items: T[], take: number): FeedPool<T> {
  *   - **Followed** — chronological, because among people you chose to follow
  *     "newest" is the only ranking anybody wants. Nothing is filtered out of this
  *     pool: a post from someone you follow always gets its slot, even one you have
- *     already rated.
- *   - **Discovery** — people you do *not* follow, ranked by `hotScore`, which is
- *     what makes this "who is worth seeing right now" rather than "who posted
- *     last". The session's seed decides how far in it starts.
- *   - **Fresh** — the newest of everything, used only to fill slots the other two
- *     could not.
+ *     already rated, and even when the account you followed is the bot.
+ *   - **Discovery** — real people you do *not* follow, whose posts you have not seen,
+ *     newest first.
+ *   - **Fresh** — the same thing without the "real people" clause, used only to fill
+ *     slots the other two could not.
  *
- * Discovery and fresh both drop posts the viewer has already rated and posts the
- * viewer wrote. Rating something is the engagement this whole app is built on;
- * showing it again is asking a question already answered, and your own bakchodi is
- * not a discovery. Neither exclusion applies to the followed pool, so nothing a
- * friend posts ever silently vanishes from your feed.
+ * Discovery and fresh both drop posts the viewer wrote, has already rated, or has
+ * already had on screen. Your own bakchodi is not a discovery, rating something is
+ * the engagement this whole app is built on, and a post you scrolled past has had its
+ * turn. None of those exclusions applies to the followed pool, so nothing a friend
+ * posts ever silently vanishes from your feed.
+ *
+ * Two deliberate departures from what this used to be:
+ *
+ * **Discovery is ordered by the clock, not by `hotScore`.** Ranking strangers by
+ * score sounds right and reads wrong: the highest-scoring post in the database was
+ * pinned to the top of every For You that had not *rated* it, so scrolling past
+ * something did nothing and the same card greeted you all week. `PostView` is what
+ * fixed that, and once a post retires on sight there is nothing left for a score to
+ * add — everything in the pool is unseen, so "best" and "newest" pick from the same
+ * set and only one of them keeps the feed moving. `hotScore` still orders Trending,
+ * which is the tab that is *asking* what is hot.
+ *
+ * **The house account only reaches the backstop.** It posts on a timer and never
+ * sleeps, so on recency alone it out-produces the people it is meant to be talking
+ * to — a quiet evening would be its feed rather than theirs. Keeping it out of
+ * discovery means it fills a slot only once there is no unseen human post left for
+ * that slot, or if you followed it on purpose. Nothing about it is scored either way.
  */
 async function fetchForYou(
   viewerId: string,
   rawCursor?: string | null,
 ): Promise<FeedPage> {
-  const { seed, offset } = decodeForYouCursor(rawCursor);
+  const { offset } = decodeForYouCursor(rawCursor);
   if (offset >= FOR_YOU_MAX) return { posts: [], nextCursor: null };
 
   // One more than the page so the blend can tell whether there is another page.
@@ -932,7 +1173,6 @@ async function fetchForYou(
   // — the followed pool only fills three slots in four — so a full page is always
   // reachable without a second round trip.
   const need = Math.min(offset + FEED_PAGE_SIZE + 1, FOR_YOU_MAX + 1);
-  const rotate = seed % DISCOVERY_ROTATE;
 
   const follows = await prisma.follow.findMany({
     where: { followerId: viewerId },
@@ -942,13 +1182,25 @@ async function fetchForYou(
   });
   const followedAuthors = follows.map((f) => f.followeeId);
 
-  /** Already rated, or mine. Excluded from the two stranger pools. */
-  const unseenByViewer: Prisma.PostWhereInput = {
+  /**
+   * Had its turn: written by the viewer, rated by them, or already on their screen.
+   * Excluded from both stranger pools.
+   *
+   * One `NOT` over an `OR` rather than two `NOT`s, because Prisma would translate the
+   * second into a `NOT (EXISTS ...)` of its own and Postgres plans the single
+   * anti-join better.
+   */
+  const hadItsTurn: Prisma.PostWhereInput = {
     authorId: { not: viewerId },
-    NOT: { ratings: { some: { raterId: viewerId } } },
+    NOT: {
+      OR: [
+        { ratings: { some: { raterId: viewerId } } },
+        { views: { some: { viewerId } } },
+      ],
+    },
   };
 
-  const [followedRows, discoveryRaw, freshRows] = await Promise.all([
+  const [followedRows, discoveryRows, freshRows] = await Promise.all([
     followedAuthors.length > 0
       ? prisma.post.findMany({
           where: { ...FEED_SCOPE, authorId: { in: followedAuthors } },
@@ -961,19 +1213,20 @@ async function fetchForYou(
     prisma.post.findMany({
       where: {
         ...FEED_SCOPE,
-        ...unseenByViewer,
+        ...hadItsTurn,
+        // The whole point of this pool: strangers who are people.
+        author: { isAI: false },
         ...(followedAuthors.length > 0
           ? { authorId: { notIn: [...followedAuthors, viewerId] } }
           : {}),
       },
       select: feedSelect,
-      orderBy: [{ hotScore: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-      // The rotation is fetched on top and sliced off the front below.
-      take: need + rotate,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: need,
     }),
 
     prisma.post.findMany({
-      where: { ...FEED_SCOPE, ...unseenByViewer },
+      where: { ...FEED_SCOPE, ...hadItsTurn },
       select: feedSelect,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: need,
@@ -986,10 +1239,7 @@ async function fetchForYou(
     followedAuthors.length > 0
       ? toPool(followedRows, need)
       : { items: followedRows, complete: true },
-    // Dropping a constant number off the front keeps the list stable as `need`
-    // grows: page 2 sees the same discovery ordering page 1 did, minus the same
-    // prefix, which is what offset paging needs to not skip or repeat.
-    { ...toPool(discoveryRaw, need + rotate), items: discoveryRaw.slice(rotate) },
+    toPool(discoveryRows, need),
     toPool(freshRows, need),
   );
 
@@ -998,11 +1248,59 @@ async function fetchForYou(
     blended.length > offset + FEED_PAGE_SIZE && offset + FEED_PAGE_SIZE < FOR_YOU_MAX;
 
   return {
-    posts: await attachViewerRatings(window, viewerId),
+    posts: await attachViewerState(window, viewerId),
     nextCursor: hasMore
-      ? encodeForYouCursor({ seed, offset: offset + FEED_PAGE_SIZE })
+      ? encodeForYouCursor({ offset: offset + FEED_PAGE_SIZE })
       : null,
   };
+}
+
+/**
+ * How many posts one report may name.
+ *
+ * A screenful is a dozen; this is five of them, which covers a fast scroll between
+ * two flushes and puts a ceiling on what a hand-built request can ask the database
+ * to do in one go.
+ */
+const SEEN_BATCH_MAX = 60;
+
+/**
+ * Record that these posts have been on this viewer's screen.
+ *
+ * The input to the exclusion in `fetchForYou`, and the reason a high-scoring post no
+ * longer greets the same reader every day. Called from the feed as it scrolls, in
+ * batches, so it has to be cheap and it has to be unfailing: a post id that is not a
+ * feed post is dropped rather than refused, because the caller is a scroll handler
+ * and there is nothing useful it could do with an error.
+ *
+ * Ids are resolved against `Post` first. `createMany` is a single statement, so one
+ * id naming a row that is not there would take the whole batch down with a foreign
+ * key violation.
+ */
+export async function markPostsSeen(
+  viewerId: string,
+  postIds: readonly unknown[],
+): Promise<number> {
+  const ids = [
+    ...new Set(
+      postIds.filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  ].slice(0, SEEN_BATCH_MAX);
+  if (ids.length === 0) return 0;
+
+  const real = await prisma.post.findMany({
+    where: { id: { in: ids }, ...FEED_SCOPE },
+    select: { id: true },
+  });
+  if (real.length === 0) return 0;
+
+  // `skipDuplicates` is what makes re-scrolling free: the second sighting is an
+  // index probe that writes nothing, rather than an upsert per post.
+  const { count } = await prisma.postView.createMany({
+    data: real.map((p) => ({ postId: p.id, viewerId })),
+    skipDuplicates: true,
+  });
+  return count;
 }
 
 /**
@@ -1024,22 +1322,13 @@ export async function fetchPinnedPost(
   });
   if (!post) return null;
 
-  const viewerRating = viewerId
-    ? (
-        await prisma.rating.findUnique({
-          where: { postId_raterId: { postId, raterId: viewerId } },
-          select: { value: true },
-        })
-      )?.value ?? null
-    : null;
-
-  return { ...post, viewerRating };
+  return { ...post, ...(await viewerStateFor(postId, viewerId)) };
 }
 
 /**
  * Every platform announcement, newest first. Backs `/updates` and the admin panel.
  *
- * No cursor and no viewer rating: these are written by hand a few times a year, and
+ * No cursor and no viewer state: these are written by hand a few times a year, and
  * none of them is rateable. `take` is a ceiling rather than a page — when there are
  * ever more than a hundred of these, the page can grow a cursor.
  */
@@ -1050,7 +1339,11 @@ export async function fetchOfficialPosts(): Promise<FeedPost[]> {
     take: 100,
     select: feedSelect,
   });
-  return posts.map((post) => ({ ...post, viewerRating: null }));
+  return posts.map((post) => ({
+    ...post,
+    viewerRating: null,
+    viewerPollOptionId: null,
+  }));
 }
 
 /**
@@ -1084,16 +1377,7 @@ export async function fetchPostWithComments(postId: string, viewerId?: string | 
   });
   if (!post || post.isHidden || post.isStory) return null;
 
-  const viewerRating = viewerId
-    ? (
-        await prisma.rating.findUnique({
-          where: { postId_raterId: { postId, raterId: viewerId } },
-          select: { value: true },
-        })
-      )?.value ?? null
-    : null;
-
-  return { ...post, viewerRating };
+  return { ...post, ...(await viewerStateFor(postId, viewerId)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,6 +1424,21 @@ export function toClientPost(post: FeedPost): ClientPost {
     ratingsCount: post.ratingsCount,
     average: post.ratingsCount > 0 ? post.ratingsSum / post.ratingsCount : null,
     commentsCount: post._count.comments,
+    // Keyed off `kind` rather than off the options being non-empty, so a poll whose
+    // options somehow failed to write renders as a broken poll rather than quietly
+    // as a text post.
+    poll:
+      post.kind === "POLL"
+        ? {
+            options: post.pollOptions.map((o) => ({
+              id: o.id,
+              label: o.label,
+              votes: o.votesCount,
+            })),
+            totalVotes: post.pollOptions.reduce((n, o) => n + o.votesCount, 0),
+            viewerOptionId: post.viewerPollOptionId,
+          }
+        : null,
     isOfficial: post.isOfficial,
     createdAt: post.createdAt.toISOString(),
     author: {

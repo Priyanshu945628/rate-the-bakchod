@@ -7,7 +7,7 @@
  * strings for exactly that reason.
  */
 
-export type PostKindName = "IMAGE" | "VIDEO" | "AUDIO" | "TWEET";
+export type PostKindName = "IMAGE" | "VIDEO" | "AUDIO" | "TWEET" | "POLL";
 export type ArchiveStateName = "PENDING" | "UPLOADING" | "UPLOADED" | "VERIFIED" | "FAILED";
 
 export interface ClientAuthor {
@@ -17,6 +17,21 @@ export interface ClientAuthor {
   avatarUrl: string | null;
   isAI: boolean;
   bakchodScore: number;
+}
+
+export interface ClientPollOption {
+  id: string;
+  label: string;
+  votes: number;
+}
+
+/** The options on a POLL post, plus where the signed-in viewer stands on them. */
+export interface ClientPoll {
+  /** In the order the author typed them, which is never the vote order. */
+  options: ClientPollOption[];
+  totalVotes: number;
+  /** Which option this viewer picked, or null — including for a signed-out one. */
+  viewerOptionId: string | null;
 }
 
 export interface ClientPost {
@@ -37,6 +52,8 @@ export interface ClientPost {
   ratingsCount: number;
   average: number | null;
   commentsCount: number;
+  /** Present exactly when `kind` is `POLL`. */
+  poll: ClientPoll | null;
   /** A platform announcement: badged, and carries no rating. */
   isOfficial: boolean;
   createdAt: string;

@@ -150,6 +150,17 @@ export function ClipIcon({ className }: IconProps) {
   );
 }
 
+/** Three bars of different lengths: a poll, before anybody has voted evenly. */
+export function PollIcon({ className }: IconProps) {
+  return (
+    <svg {...stroke} className={className}>
+      <path d="M5 6.5h13" />
+      <path d="M5 12h8.5" />
+      <path d="M5 17.5h4.5" />
+    </svg>
+  );
+}
+
 export function SparkIcon({ className }: IconProps) {
   return (
     <svg {...stroke} className={className}>
