@@ -308,6 +308,31 @@ function missingPath(err: unknown): boolean {
   return err.status === 404 || err.status === 405;
 }
 
+/**
+ * True when the endpoint took the rich request, answered 200, and ignored the schema.
+ *
+ * The failure {@link unsupportedShape} describes is the polite one: the gateway reads a
+ * field it does not implement and says so. The common one is this — it forwards the body,
+ * drops everything it does not recognise, and returns ordinary prose where JSON was asked
+ * for. The SDK notices when it tries to parse the reply and raises a plain
+ * `AnthropicError` with no status on it, which is why neither status predicate above can
+ * see this and why the whole request would otherwise be scored as a dead endpoint.
+ *
+ * It is not a dead endpoint. It is an endpoint that just answered the question in prose,
+ * which is precisely what the plain rung asks for on purpose — so drop to that rung and
+ * the same gateway starts working on the next call.
+ *
+ * Matched on the message because the SDK raises the base class for this and there is no
+ * narrower one to catch; the `APIError` exclusion keeps a real HTTP failure out of it.
+ */
+function ignoredSchema(err: unknown): boolean {
+  return (
+    err instanceof Anthropic.AnthropicError &&
+    !(err instanceof Anthropic.APIError) &&
+    err.message.startsWith("Failed to parse structured output")
+  );
+}
+
 /** Trim, cap, and treat an empty reply as no reply. */
 function oneLine(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -320,12 +345,15 @@ const LINE_PLAIN_INSTRUCTION =
   "Reply with the line itself. No JSON, no quotes, no preamble.";
 
 /** Note the drop down a rung, once, in the words the log reader needs. */
-function noteShape(from: RequestShape, to: RequestShape, err: unknown) {
-  const why =
-    to === "openai"
-      ? "no /v1/messages on this endpoint; treating it as OpenAI-compatible from here on"
-      : "endpoint refused the rich request shape; sending plain messages from here on";
-  console.warn(`[bakchod-ai] ${why} (was ${from}):`, err);
+function noteShape(to: RequestShape, why: string, err: unknown) {
+  console.warn(`[bakchod-ai] ${why}; ${to} requests to this endpoint from here on:`, err);
+}
+
+/** Why the rich rung was given up on, or null when the error is not ours to absorb. */
+function richRungGaveUp(err: unknown): string | null {
+  if (unsupportedShape(err)) return "endpoint refused the rich request shape";
+  if (ignoredSchema(err)) return "endpoint ignored the output schema and answered in prose";
+  return null;
 }
 
 /**
@@ -333,11 +361,12 @@ function noteShape(from: RequestShape, to: RequestShape, err: unknown) {
  *
  * First choice is the rich one: server-side fallbacks so a tripped classifier still
  * answers, adaptive thinking, a cached persona, and a schema so the reply arrives
- * needing no cleanup. When the endpoint refuses that shape the same prompt goes out as
- * an ordinary `messages.create`, and when it turns out to have no `/v1/messages` at all
- * the same prompt goes out again as an OpenAI completion. Each rung is worse than the
- * one above it — but the alternative is a bot that has been quietly reciting canned
- * Hinglish since the day a gateway was configured, with a healthy-looking log to match.
+ * needing no cleanup. When the endpoint refuses that shape — or takes it, ignores the
+ * schema and answers in prose — the same prompt goes out as an ordinary
+ * `messages.create`, and when it turns out to have no `/v1/messages` at all the same
+ * prompt goes out again as an OpenAI completion. Each rung is worse than the one above
+ * it — but the alternative is a bot that has been quietly reciting canned Hinglish since
+ * the day a gateway was configured, with a healthy-looking log to match.
  *
  * `null` means no usable line: a refusal, or an empty reply. Callers turn that into a
  * canned line. A thrown error is theirs to catch.
@@ -366,9 +395,10 @@ async function askForLine<S extends z.ZodType>(
       if (message.stop_reason === "refusal") return null;
       return oneLine((message.parsed_output as Record<string, unknown> | null)?.[field]);
     } catch (err) {
-      if (!unsupportedShape(err)) throw err;
+      const why = richRungGaveUp(err);
+      if (why === null) throw err;
       endpoint.shape = "plain";
-      noteShape("rich", "plain", err);
+      noteShape("plain", why, err);
     }
   }
 
@@ -402,7 +432,7 @@ async function askForLine<S extends z.ZodType>(
     } catch (err) {
       if (!missingPath(err)) throw err;
       endpoint.shape = "openai";
-      noteShape("plain", "openai", err);
+      noteShape("openai", "no /v1/messages on this endpoint", err);
     }
   }
 
@@ -514,9 +544,10 @@ async function askForPoll(
         Array.isArray(parsed?.options) ? parsed.options : [],
       );
     } catch (err) {
-      if (!unsupportedShape(err)) throw err;
+      const why = richRungGaveUp(err);
+      if (why === null) throw err;
       endpoint.shape = "plain";
-      noteShape("rich", "plain", err);
+      noteShape("plain", why, err);
     }
   }
 
@@ -547,7 +578,7 @@ async function askForPoll(
     } catch (err) {
       if (!missingPath(err)) throw err;
       endpoint.shape = "openai";
-      noteShape("plain", "openai", err);
+      noteShape("openai", "no /v1/messages on this endpoint", err);
     }
   }
 
