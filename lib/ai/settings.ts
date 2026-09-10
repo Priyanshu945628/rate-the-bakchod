@@ -21,7 +21,6 @@ import "server-only";
 
 import { serverEnv } from "../config";
 import { prisma } from "../prisma";
-import { canRenderText } from "./card";
 import { seal, SHREDDED, unseal, type SealedWrite } from "./sealed";
 import { loadEndpointCredentials } from "./endpoints";
 import {
@@ -133,7 +132,6 @@ export async function loadBotSettings(): Promise<BotSettings> {
     commentDelayMinutes: row?.commentDelayMinutes ?? BOT_DEFAULTS.commentDelayMinutes,
     maxCommentsPerTick: row?.maxCommentsPerTick ?? BOT_DEFAULTS.maxCommentsPerTick,
     postIntervalMinutes: row?.postIntervalMinutes ?? BOT_DEFAULTS.postIntervalMinutes,
-    cardPercent: row?.cardPercent ?? BOT_DEFAULTS.cardPercent,
     pollPercent: row?.pollPercent ?? BOT_DEFAULTS.pollPercent,
     candidates,
   };
@@ -153,7 +151,7 @@ function sourceOf(stored: string | null, fromEnv: string | undefined): Credentia
  * ever being a place a shoulder-surfer can read a credential off.
  */
 export async function readBotStatus(): Promise<BotStatus> {
-  const [row, canRenderCards] = await Promise.all([loadRow(), canRenderText()]);
+  const row = await loadRow();
   const stored = row ? readSecret(row) : null;
 
   return {
@@ -161,7 +159,6 @@ export async function readBotStatus(): Promise<BotStatus> {
     commentDelayMinutes: row?.commentDelayMinutes ?? BOT_DEFAULTS.commentDelayMinutes,
     maxCommentsPerTick: row?.maxCommentsPerTick ?? BOT_DEFAULTS.maxCommentsPerTick,
     postIntervalMinutes: row?.postIntervalMinutes ?? BOT_DEFAULTS.postIntervalMinutes,
-    cardPercent: row?.cardPercent ?? BOT_DEFAULTS.cardPercent,
     pollPercent: row?.pollPercent ?? BOT_DEFAULTS.pollPercent,
     apiKey: sourceOf(stored, serverEnv.anthropicKey),
     baseUrl: sourceOf(row?.baseUrl ?? null, serverEnv.anthropicBaseUrl),
@@ -172,7 +169,6 @@ export async function readBotStatus(): Promise<BotStatus> {
     // The one thing on this page that answers "is it running on its own" — and a
     // timestamp cannot leak a credential, which is why it is allowed here at all.
     lastTickAt: row?.lastTickAt?.toISOString() ?? null,
-    canRenderCards,
   };
 }
 

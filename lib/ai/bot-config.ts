@@ -19,12 +19,7 @@ export const BOT_DEFAULTS = {
   maxCommentsPerTick: 3,
   /** Six hours. */
   postIntervalMinutes: 360,
-  /** Two in five of its own posts are a rendered card rather than a line of text. */
-  cardPercent: 40,
-  /**
-   * And of the ones that are not cards, three in ten are a poll rather than a line.
-   * Applied after the card roll, so this is a share of the rest — not of everything.
-   */
+  /** Three in ten of its own posts are a poll rather than a line. */
   pollPercent: 30,
 } as const;
 
@@ -40,7 +35,6 @@ export const BOT_BOUNDS = {
   commentDelayMinutes: { min: 0, max: 1440 },
   maxCommentsPerTick: { min: 0, max: 20 },
   postIntervalMinutes: { min: 5, max: 20160 },
-  cardPercent: { min: 0, max: 100 },
   pollPercent: { min: 0, max: 100 },
 } as const;
 
@@ -54,7 +48,6 @@ export const BotTuningSchema = z.object({
   commentDelayMinutes: bounded("commentDelayMinutes"),
   maxCommentsPerTick: bounded("maxCommentsPerTick"),
   postIntervalMinutes: bounded("postIntervalMinutes"),
-  cardPercent: bounded("cardPercent"),
   pollPercent: bounded("pollPercent"),
 });
 
@@ -197,9 +190,4 @@ export interface BotStatus extends BotTuning {
    * between a bot that posts on its own and one that waits for the button.
    */
   lastTickAt: string | null;
-  /**
-   * Whether this container can draw text at all. False means cards silently become
-   * text posts, which is otherwise invisible from the outside.
-   */
-  canRenderCards: boolean;
 }

@@ -60,7 +60,7 @@ describe("BotTuningSchema", () => {
   it("lets zero switch a behaviour off", () => {
     // Documented behaviour, not an accident of the floors: no comments, no cards, no
     // delay are each a setting somebody may want.
-    for (const key of ["commentDelayMinutes", "maxCommentsPerTick", "cardPercent"]) {
+    for (const key of ["commentDelayMinutes", "maxCommentsPerTick"]) {
       expect(BotTuningSchema.safeParse(tuning({ [key]: 0 })).success).toBe(true);
     }
   });

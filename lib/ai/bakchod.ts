@@ -10,7 +10,7 @@ import "server-only";
  *     posts is rejected in the service layer and every leaderboard query filters
  *     it out. Its points are never calculated, anywhere.
  *  2. **It never goes silent.** No API key, a rate limit, a refusal, a network
- *     blip — every path falls through to a canned Hinglish line. A dead bot is
+ *     blip — every path falls through to a canned English line. A dead bot is
  *     worse than a repetitive one.
  *
  * Tone rails live in the system prompt. This is a roast bot pointed at photos of
@@ -41,7 +41,6 @@ import { prisma } from "../prisma";
 import { ensureAIUser } from "../house-accounts";
 import { readMedia, type MediaRow } from "../media/store";
 import { addComment, createPost } from "../posts";
-import { CARD_LAYOUTS, renderBakchodCard, type CardLayout } from "./card";
 import { recordEndpointFailure, recordEndpointOk } from "./endpoints";
 import { askOpenAIShape } from "./openai-shape";
 import { loadBotSettings, type BotCandidate, type BotSettings } from "./settings";
@@ -57,13 +56,18 @@ import { loadBotSettings, type BotCandidate, type BotSettings } from "./settings
 const SYSTEM_PROMPT = `You are "Bakchod AI", the resident troublemaker on Rate the Bakchod — a platform where people post their friends' most bakchod moments and everyone rates how big a bakchod they are, out of 10.
 
 Your voice:
-- Hinglish, the way friends actually talk. Roman script, never Devanagari.
+- English, plain and conversational. The register is friends ribbing each other, in
+  English — not a translation of Hindi. A Hindi word is fine where English has no
+  equivalent for it and the meaning is obvious in context (\`bakchodi\`, \`bakchod\`,
+  \`jugaad\`, \`adda\`); a sentence built out of them is not. Never Devanagari.
 - Short. One or two lines. A long roast is not a roast, it's an essay.
 - Punch down at the *situation*, never at the person. The bakchodi is the target.
 - Specific beats generic. React to what is actually in front of you, not to "this post".
 - Never explain the joke and never announce that you are an AI.
 
 Hard limits — these are not stylistic preferences:
+- English only. Every word you write is English, whatever language the post you are
+  looking at was written in. A Hinglish caption gets an English answer.
 - No slurs, ever.
 - Nothing about anyone's body, weight, skin tone, or looks.
 - Nothing keyed to caste, religion, region, gender, or sexuality.
@@ -76,14 +80,14 @@ Think of it as ribbing a close friend who will rib you back, in front of other f
 const CommentSchema = z.object({
   comment: z
     .string()
-    .describe("One or two lines of Hinglish roast, under 200 characters."),
+    .describe("One or two lines of English roast, under 200 characters."),
 });
 
 const PostSchema = z.object({
   tweetText: z
     .string()
     .describe(
-      "A short original bakchod observation or fake-confession, Hinglish, under 240 characters.",
+      "A short original bakchod observation or fake-confession, in English, under 240 characters.",
     ),
 });
 
@@ -98,7 +102,7 @@ const CardSchema = z.object({
   line: z
     .string()
     .describe(
-      "One punchy Hinglish line, under 110 characters, to be printed large on a plain card. No surrounding quotes, no hashtags, no emoji.",
+      "One punchy English line, under 110 characters, to be printed large on a plain card. No surrounding quotes, no hashtags, no emoji.",
     ),
 });
 
@@ -115,13 +119,13 @@ const PollSchema = z.object({
   question: z
     .string()
     .describe(
-      "The question, Hinglish, under 140 characters. It has to be answerable by picking one of the options — not open-ended, and not a yes/no you already know the answer to.",
+      "The question, in English, under 140 characters. It has to be answerable by picking one of the options — not open-ended, and not a yes/no you already know the answer to.",
     ),
   options: z
     .array(
       z
         .string()
-        .describe("One answer, Hinglish, under 60 characters. Funny, but a real answer."),
+        .describe("One answer, in English, under 60 characters. Funny, but a real answer."),
     )
     .min(limits.pollMinOptions)
     .max(limits.pollMaxOptions)
@@ -140,33 +144,33 @@ const PollSchema = z.object({
  * obviously loop.
  */
 const CANNED_COMMENTS = [
-  "Bhai yeh kya kar raha hai 💀",
-  "Iska rating 10/10, no discussion.",
-  "Screenshot le liya. Evidence ready hai.",
-  "Peak bakchodi. Aur kuch bacha hi nahi.",
-  "Isko koi rok lo yaar 😭",
-  "Confidence dekho, aukat dekho.",
-  "Main bas dekh raha hoon, kuch bol nahi raha.",
-  "Yeh banda apne aap mein ek genre hai.",
+  "What is he even doing 💀",
+  "Ten out of ten, no discussion.",
+  "Screenshot taken. The evidence is filed.",
+  "Peak bakchodi. Nothing left to say.",
+  "Somebody stop him 😭",
+  "Look at the confidence. Look at the odds.",
+  "I'm just watching. Not saying a word.",
+  "This man is a genre of his own.",
   "Certified bakchod behaviour, no notes.",
-  "Kisi ne isse manaa kyu nahi kiya?",
-  "Har group mein ek yeh hota hai.",
-  "Legend ne dobara kar diya 🫡",
-  "Yeh dekhkar mera din ban gaya, iski barbaad.",
-  "Ratings mein isko top 3 mein dekh raha hoon.",
-  "Bhai ne apni hi izzat ka encounter kar diya.",
+  "Why did nobody try to stop him?",
+  "Every group has exactly one of these.",
+  "The legend has done it again 🫡",
+  "This made my day and ruined his.",
+  "I'm seeing this in the top three already.",
+  "He ran into his own reputation at full speed.",
 ];
 
 const CANNED_POSTS = [
-  "Roll call: aaj kis kis ne bina soche kuch bola? Main pehle 🙋",
-  "Reminder — leaderboard pe aane ke liye talent nahi, sirf confidence chahiye.",
-  "Aaj ka sabse bada bakchod comments mein khud declare kare. Main judge hoon.",
-  "Theory: har dost group mein ek banda hota hai jo sirf content ke liye exist karta hai.",
-  "Feed thoda shaant hai. Koi apne dost ki izzat ka encounter karega ya main karoon?",
+  "Roll call: who said something today without thinking first? Me. Obviously 🙋",
+  "Reminder — the leaderboard rewards confidence, not talent.",
+  "Declare yourself the biggest bakchod of the day in the comments. I'm the judge.",
+  "Theory: every friend group has one person who exists purely as content.",
+  "The feed is quiet. Is someone going to embarrass a friend, or am I?",
   // No canned poll in here on purpose: a poll is buttons people press, and six of
   // them on a loop would be the same question asked forever. When the model cannot
   // write one, the tick posts a line instead — see `runBakchodTick`.
-  "Bakchodi ek talent hai, aur main iska self-appointed brand ambassador hoon.",
+  "Bakchodi is a talent, and I am its self-appointed brand ambassador.",
 ];
 
 function pick<T>(pool: readonly T[]): T {
@@ -299,7 +303,7 @@ function unsupportedShape(err: unknown): boolean {
  * disliked the body, whereas 404 and 405 mean the SDK has been posting at a path this
  * host does not serve. Most gateways behind a pasted base URL are OpenAI-shaped, and
  * against one of those *every* call the SDK makes is this — so rather than let the bot
- * recite canned Hinglish forever behind a healthy-looking panel, the next thing tried is
+ * recite canned lines forever behind a healthy-looking panel, the next thing tried is
  * `/v1/chat/completions`. If that is not there either, the throw from it ends this
  * endpoint's turn and the chain moves on, which is what it would have done anyway.
  */
@@ -342,7 +346,7 @@ function oneLine(value: unknown): string | null {
 
 /** What the schema said, for the two paths that have no schema to say it. */
 const LINE_PLAIN_INSTRUCTION =
-  "Reply with the line itself. No JSON, no quotes, no preamble.";
+  "Reply in English with the line itself. No JSON, no quotes, no preamble.";
 
 /** Note the drop down a rung, once, in the words the log reader needs. */
 function noteShape(to: RequestShape, why: string, err: unknown) {
@@ -365,7 +369,7 @@ function richRungGaveUp(err: unknown): string | null {
  * schema and answers in prose — the same prompt goes out as an ordinary
  * `messages.create`, and when it turns out to have no `/v1/messages` at all the same
  * prompt goes out again as an OpenAI completion. Each rung is worse than the one above
- * it — but the alternative is a bot that has been quietly reciting canned Hinglish since
+ * it — but the alternative is a bot that has been quietly reciting canned lines since
  * the day a gateway was configured, with a healthy-looking log to match.
  *
  * `null` means no usable line: a refusal, or an empty reply. Callers turn that into a
@@ -454,7 +458,7 @@ export interface GeneratedPoll {
  * fronting an older model too, and a hand-written JSON object comes back with a stray
  * trailing comma often enough to matter. Lines cannot be malformed.
  */
-const POLL_PLAIN_INSTRUCTION = `Reply as plain lines and nothing else: the question on the first line, then one option per line, up to ${limits.pollMaxOptions} of them. No JSON, no numbering, no blank lines, no preamble.`;
+const POLL_PLAIN_INSTRUCTION = `Reply in English as plain lines and nothing else: the question on the first line, then one option per line, up to ${limits.pollMaxOptions} of them. No JSON, no numbering, no blank lines, no preamble.`;
 
 /** `- answer`, `2) answer`, `• answer` — whatever the plain path decorated it with. */
 function stripMarker(line: string): string {
@@ -745,54 +749,6 @@ export async function generatePoll(
   );
 }
 
-/** What each layout is asking for, in one clause. The look is in `./card`. */
-const CARD_BRIEF: Record<CardLayout, string> = {
-  certificate: "an award citation for a bakchod who has thoroughly earned it",
-  notice: "a mock public notice, the way a housing society pins one to the lift",
-  confession: "a confession the whole feed will recognise itself in",
-};
-
-/**
- * The line for a picture post, or null to skip the picture.
- *
- * Deliberately no canned fallback. Rule 2 is about the bot never going silent, and
- * the caller keeps that promise by posting text instead — whereas six canned lines
- * cycling through a designed plaque would be six recognisable pictures forever.
- */
-async function generateCardLine(
-  settings: BotSettings,
-  layout: CardLayout,
-): Promise<string | null> {
-  return askAcrossEndpoints(settings, CardSchema, "line", [
-    {
-      type: "text",
-      text: `Write ${CARD_BRIEF[layout]}. It will be printed large on a plain card, so it has to land on its own with no post around it — no reply, no context, no "as I was saying".`,
-    },
-  ]);
-}
-
-/**
- * Try for a picture post: the model writes the line, the server sets it.
- *
- * Null whenever anything ordinary goes wrong — no key, a refusal, or a container
- * with no font installed ({@link renderBakchodCard} answers null for that) — and the
- * caller falls back to a text post, so a missing font costs pictures rather than the
- * whole slot.
- */
-async function renderOwnCard(
-  settings: BotSettings,
-): Promise<{ png: Buffer; line: string } | null> {
-  const layout = pick(CARD_LAYOUTS);
-  try {
-    const line = await generateCardLine(settings, layout);
-    if (!line) return null;
-    const png = await renderBakchodCard(layout, line);
-    return png ? { png, line } : null;
-  } catch (err) {
-    console.warn("[bakchod-ai] card render failed, posting text instead:", err);
-    return null;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // The tick
@@ -921,53 +877,37 @@ export async function runBakchodTick(): Promise<TickResult> {
 
   if (due) {
     try {
-      // Decided before the feed context is fetched, because a card does not use it:
-      // a plaque has to land on its own, so priming it with what the feed said last
-      // is both pointless and a query.
-      const wantCard = Math.random() * 100 < settings.cardPercent;
-      const card = wantCard ? await renderOwnCard(settings) : null;
+      const recent = await prisma.post.findMany({
+        where: { isHidden: false, author: { isAI: false } },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: { caption: true, tweetText: true },
+      });
+      const captions = recent
+        .map((r) => r.caption ?? r.tweetText)
+        .filter((c): c is string => Boolean(c));
 
-      if (card) {
-        // The caption repeats the line deliberately. The card is a picture of a
-        // sentence, and the sentence has to exist as text as well — it is the image's
-        // alt text, the notification preview, and the whole post for anyone whose
-        // image never loads.
-        await createPost({ author: bot, file: card.png, caption: card.line });
-      } else {
-        const recent = await prisma.post.findMany({
-          where: { isHidden: false, author: { isAI: false } },
-          orderBy: { createdAt: "desc" },
-          take: 5,
-          select: { caption: true, tweetText: true },
+      // Null here — no key, a refusal, or an answer that was not a poll — falls
+      // through to a line, so a poll is never the reason the slot goes empty.
+      const poll =
+        Math.random() * 100 < settings.pollPercent
+          ? await generatePoll(settings, captions)
+          : null;
+
+      if (poll) {
+        // Through the same `createPost` a person's poll goes through, which is where
+        // the rule lives: voting writes no rating, no aggregate and no total, so the
+        // house account can ask the feed a question with nothing scored either way.
+        await createPost({
+          author: bot,
+          caption: poll.question,
+          pollOptions: poll.options,
         });
-        const captions = recent
-          .map((r) => r.caption ?? r.tweetText)
-          .filter((c): c is string => Boolean(c));
-
-        // Rolled only among the posts that are not cards, which is what makes these
-        // two percentages an order rather than two shares somebody has to keep adding
-        // up to 100. Null here — no key, a refusal, or an answer that was not a poll —
-        // falls through to a line, so a poll is never the reason the slot goes empty.
-        const poll =
-          Math.random() * 100 < settings.pollPercent
-            ? await generatePoll(settings, captions)
-            : null;
-
-        if (poll) {
-          // Through the same `createPost` a person's poll goes through, which is where
-          // the rule lives: voting writes no rating, no aggregate and no total, so the
-          // house account can ask the feed a question with nothing scored either way.
-          await createPost({
-            author: bot,
-            caption: poll.question,
-            pollOptions: poll.options,
-          });
-        } else {
-          await createPost({
-            author: bot,
-            tweetText: await generatePostText(settings, captions),
-          });
-        }
+      } else {
+        await createPost({
+          author: bot,
+          tweetText: await generatePostText(settings, captions),
+        });
       }
       posted = true;
     } catch (err) {

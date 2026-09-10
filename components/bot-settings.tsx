@@ -152,14 +152,6 @@ export function BotSettings({ initial }: { initial: BotStatus }) {
             onChange={(postIntervalMinutes) => onTuning({ postIntervalMinutes })}
           />
           <NumberField
-            id="bot-card-percent"
-            label="Cards (% of own posts)"
-            bound="cardPercent"
-            value={tuning.cardPercent}
-            onChange={(cardPercent) => onTuning({ cardPercent })}
-            pill={status.canRenderCards ? undefined : "no font"}
-          />
-          <NumberField
             id="bot-poll-percent"
             label="Polls (% of the rest)"
             bound="pollPercent"
@@ -393,7 +385,6 @@ function tuningOf(status: BotStatus): BotTuning {
     commentDelayMinutes: status.commentDelayMinutes,
     maxCommentsPerTick: status.maxCommentsPerTick,
     postIntervalMinutes: status.postIntervalMinutes,
-    cardPercent: status.cardPercent,
     pollPercent: status.pollPercent,
   };
 }
@@ -427,7 +418,6 @@ const BOUND_LABEL: Record<BoundedKey, string> = {
   commentDelayMinutes: "Comment delay",
   maxCommentsPerTick: "Comments per tick",
   postIntervalMinutes: "Post interval",
-  cardPercent: "Card share",
   pollPercent: "Poll share",
 };
 

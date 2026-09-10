@@ -694,11 +694,7 @@ model BotSetting {
   maxCommentsPerTick Int @default(3)
   /// How long between the bot's own posts.
   postIntervalMinutes Int @default(360)
-  /// What share of its own posts are rendered cards rather than text, 0-100.
-  cardPercent Int @default(40)
-  /// What share of the posts that are *not* cards are polls, 0-100. Two knobs in
-  /// order rather than three shares that have to add up: the card roll happens
-  /// first, and this one decides what the rest of them are.
+  /// What share of its own posts are polls, 0-100.
   pollPercent Int @default(30)
 
   /// The sealed API key. Null on any of the six columns means: use the environment.
