@@ -59,13 +59,28 @@ export async function POST(request: Request) {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // Ensure the identity exists. createUser is idempotent-ish: if the email
-  // already has an account it errors, which we ignore and move on to sign-in.
-  await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  });
+  // Ensure the identity exists and is confirmed.
+  const { data: created, error: createError } =
+    await admin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    });
+
+  if (createError && !created?.user) {
+    // User already exists from a previous attempt — confirm them and
+    // reset the password to the current env value.
+    const { data: list } = await admin.auth.admin.listUsers();
+    const existing = list?.users?.find(
+      (u) => u.email?.toLowerCase() === email,
+    );
+    if (existing) {
+      await admin.auth.admin.updateUserById(existing.id, {
+        password,
+        email_confirm: true,
+      });
+    }
+  }
 
   // Sign in through the per-request SSR client so the session cookie is set.
   const supabase = await createClient();
