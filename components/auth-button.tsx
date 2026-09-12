@@ -4,30 +4,40 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { startGoogleSignIn } from "@/lib/sign-in";
+import { signInWithEmail, startGoogleSignIn } from "@/lib/sign-in";
 import type { ClientViewer } from "@/lib/types";
 import { Avatar } from "./avatar";
 import { SpinnerIcon } from "./icons";
 
-/**
- * Sign in / sign out.
- *
- * OAuth returns to `/auth/callback`, which exchanges the code and then bounces
- * back to whichever page the user started on.
- */
 export function AuthButton({ viewer }: { viewer: ClientViewer | null }) {
   const [busy, setBusy] = useState(false);
+  const [showEmail, setShowEmail] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const pathname = usePathname();
   const router = useRouter();
 
   async function signIn() {
     setBusy(true);
     const message = await startGoogleSignIn(pathname);
-    // On success the browser is already navigating away, so only a failure
-    // needs the button back.
     if (message) {
       setBusy(false);
       alert(message);
+    }
+  }
+
+  async function handleEmailSignIn() {
+    if (!email.trim() || !password) return;
+    setBusy(true);
+    setError(null);
+    const message = await signInWithEmail(email, password);
+    if (message) {
+      setError(message);
+      setBusy(false);
+    } else {
+      router.refresh();
+      setBusy(false);
     }
   }
 
@@ -40,15 +50,56 @@ export function AuthButton({ viewer }: { viewer: ClientViewer | null }) {
 
   if (!viewer) {
     return (
-      <button
-        type="button"
-        onClick={signIn}
-        disabled={busy}
-        className="flex h-10 items-center gap-2 rounded-ctl bg-accent px-4 text-sm font-semibold text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-60"
-      >
-        {busy && <SpinnerIcon className="h-4 w-4 animate-spin" />}
-        Sign in with Google
-      </button>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={signIn}
+          disabled={busy}
+          className="flex h-10 items-center gap-2 rounded-ctl bg-accent px-4 text-sm font-semibold text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-60"
+        >
+          {busy && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+          Sign in with Google
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowEmail(!showEmail)}
+          className="mt-1.5 w-full text-center text-[11px] text-faint hover:text-muted"
+        >
+          or use email
+        </button>
+
+        {showEmail && (
+          <div className="absolute right-0 top-full z-30 mt-1 w-64 rounded-card border border-line bg-panel p-3 shadow-pop">
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email"
+              autoComplete="email"
+              className="h-9 w-full rounded-ctl border border-line bg-panel-2 px-3 text-sm text-ink placeholder:text-faint"
+            />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              autoComplete="current-password"
+              onKeyDown={(e) => e.key === "Enter" && void handleEmailSignIn()}
+              className="mt-2 h-9 w-full rounded-ctl border border-line bg-panel-2 px-3 text-sm text-ink placeholder:text-faint"
+            />
+            <button
+              type="button"
+              onClick={() => void handleEmailSignIn()}
+              disabled={busy || !email.trim() || !password}
+              className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-ctl bg-accent text-xs font-semibold text-accent-ink disabled:opacity-50"
+            >
+              {busy && <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />}
+              Sign in
+            </button>
+            {error && <p className="mt-2 text-xs text-danger">{error}</p>}
+          </div>
+        )}
+      </div>
     );
   }
 

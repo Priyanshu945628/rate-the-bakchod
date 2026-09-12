@@ -107,6 +107,13 @@ export const serverEnv = {
    * relay carries the whole call, which is bandwidth someone is billed for. Absent,
    * calls between two awkward networks fail to connect; they never fail to be offered.
    */
+  get adminEmail() {
+    return optional("ADMIN_EMAIL");
+  },
+  get adminPassword() {
+    return optional("ADMIN_PASSWORD");
+  },
+
   get turn() {
     const url = optional("TURN_URL");
     if (!url) return null;
