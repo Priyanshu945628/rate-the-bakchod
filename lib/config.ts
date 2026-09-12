@@ -113,6 +113,9 @@ export const serverEnv = {
   get adminPassword() {
     return optional("ADMIN_PASSWORD");
   },
+  get supabaseServiceRoleKey() {
+    return optional("SUPABASE_SERVICE_ROLE_KEY");
+  },
 
   get turn() {
     const url = optional("TURN_URL");

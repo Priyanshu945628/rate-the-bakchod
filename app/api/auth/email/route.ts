@@ -1,13 +1,18 @@
 import { NextResponse } from "next/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { serverEnv } from "@/lib/config";
+import { publicEnv } from "@/lib/config";
 import { createClient } from "@/lib/supabase/server";
 
 /**
  * Admin-only email sign-in.
  *
  * Only the email+password pair stored in `ADMIN_EMAIL` / `ADMIN_PASSWORD` is
- * accepted. Every other combination gets a flat refusal with no hint about
- * what went wrong — the existence of this route is not a door to open.
+ * accepted. Every other combination gets a flat refusal.
+ *
+ * Uses the service role key to create the Supabase identity (bypasses rate
+ * limits and email confirmation), then the per-request client to sign in so
+ * the session cookie lands on the response.
  */
 export async function POST(request: Request) {
   let body: unknown;
@@ -41,41 +46,37 @@ export async function POST(request: Request) {
     );
   }
 
-  const supabase = await createClient();
+  const serviceKey = serverEnv.supabaseServiceRoleKey;
+  if (!serviceKey) {
+    return NextResponse.json(
+      { error: "Email sign-in is not configured." },
+      { status: 500 },
+    );
+  }
 
-  // Try signing in — the account may already exist from a previous session.
+  // Admin client — bypasses rate limits and email confirmation.
+  const admin = createAdminClient(publicEnv.supabaseUrl, serviceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  // Ensure the identity exists. createUser is idempotent-ish: if the email
+  // already has an account it errors, which we ignore and move on to sign-in.
+  await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  });
+
+  // Sign in through the per-request SSR client so the session cookie is set.
+  const supabase = await createClient();
   const { error: signInError } = await supabase.auth.signInWithPassword({
     email,
     password,
   });
 
-  if (!signInError) return new NextResponse(null, { status: 204 });
-
-  // First time: create the Supabase identity, then sign in with it.
-  const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-    email,
-    password,
-  });
-
-  if (signUpError) {
+  if (signInError) {
     return NextResponse.json(
-      { error: signUpError.message },
-      { status: 500 },
-    );
-  }
-
-  // When email confirmation is off, signUp returns a session directly.
-  if (signUpData.session) return new NextResponse(null, { status: 204 });
-
-  // Otherwise try signIn — some configurations auto-confirm.
-  const { error: retryError } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
-
-  if (retryError) {
-    return NextResponse.json(
-      { error: "Account created but not confirmed. Disable email confirmation in Supabase Auth settings." },
+      { error: signInError.message },
       { status: 500 },
     );
   }
