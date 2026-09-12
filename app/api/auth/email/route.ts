@@ -59,7 +59,7 @@ export async function POST(request: Request) {
 
   if (signUpError) {
     return NextResponse.json(
-      { error: "Could not create the account." },
+      { error: signUpError.message },
       { status: 500 },
     );
   }
